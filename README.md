@@ -4,6 +4,12 @@
 
 Module for creating thumbnail images of all cells given a image and segmentation mask.
 
+## Installation
+
+```
+pip install git+https://github.com/labsyspharm/cellcutter.git#egg=cellcutter
+```
+
 ## Usage
 
 ```
