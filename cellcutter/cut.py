@@ -66,6 +66,13 @@ def save_cells_all_channels(
     mask_cells: bool = True,
 ) -> None:
     segmentation_mask_img = segmentation_mask.get_channel(0)
+    # Check if all cell IDs present in the CSV file are also represented in the segmentation mask
+    cell_ids_in_segmentation_mask = np.unique(segmentation_mask_img)
+    n_not_in_segmentation_mask = set(cell_data["CellID"]) - set(cell_ids_in_segmentation_mask)
+    if len(n_not_in_segmentation_mask) > 0:
+        raise SystemError(f"{len(n_not_in_segmentation_mask)} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask.")
+    # Remove cells from segmentation mask that are not present in the CSV
+    segmentation_mask_img[~np.isin(segmentation_mask_img, cell_data["CellID"])] = 0
     if window_size is None:
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask_img)

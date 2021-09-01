@@ -25,10 +25,13 @@ cut_cells [OPTIONS] IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION
 
   CELL_DATA - Path to CSV file with a row for each cell. Must contain columns
   CellID (must correspond to the cell IDs in the segmentation mask),
-  Y_Centroid, and X_Centroid.
+  Y_centroid, and X_centroid.
 
-  DESTINATION - Path to file where cell thumbnails will be stored in Zarr
-  format (https://zarr.readthedocs.io/en/stable/index.html).
+  DESTINATION - Path to a new directory where cell thumbnails will be stored
+  in Zarr format (https://zarr.readthedocs.io/en/stable/index.html).
+
+  The output is a Zarr array with the dimensions [#channels, #cells,
+  window_size, window_size]
 
 Options:
   --window-size INTEGER           Size of the cell thumbnail in pixels.
