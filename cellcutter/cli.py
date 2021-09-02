@@ -22,7 +22,12 @@ from . import cut as cut_mod
     default=True,
     help="Fill every pixel not occupied by the target cell with zeros.",
 )
-def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cells):
+@click.option(
+    "-t",
+    default=1,
+    help="Number of threads used.",
+)
+def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cells, t):
     """Cut out thumbnail images of all cells.
 
     IMAGE - Path to image in TIFF format, potentially with multiple channels.
@@ -46,11 +51,12 @@ def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cell
     img = cut_mod.Image(image)
     segmentation_mask_img = cut_mod.Image(segmentation_mask)
     cell_data_df = pd.read_csv(cell_data)
-    cut_mod.save_cells_all_channels(
+    cut_mod.process_all_channels(
         img,
         segmentation_mask_img,
         cell_data_df,
         destination,
         window_size=window_size,
         mask_cells=mask_cells,
+        processes=t,
     )
