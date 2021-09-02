@@ -1,7 +1,8 @@
 import logging
 import concurrent.futures
+import itertools
 import tempfile
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -9,10 +10,20 @@ import tifffile
 import zarr
 from numcodecs import Blosc
 from skimage.measure import regionprops_table
+from zarr.core import Array
+from zarr.creation import create
+
+
+def pairwise(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
+    a, b = itertools.tee(iterable)
+    next(b, None)
+    return zip(a, b)
 
 
 class Image:
     def __init__(self, path: str):
+        self.path = path
         self.image = tifffile.TiffFile(path)
         self.base_series = self.image.series[0]
 
@@ -32,39 +43,85 @@ def cut_cells(
     img: np.ndarray,
     cell_data: pd.DataFrame,
     window_size: int,
-    mask_thumbnails: Optional[np.ndarray] = None,
-    cell_stack: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    if cell_stack is None:
-        cell_stack = np.empty(
-            (cell_data.shape[0], window_size, window_size), dtype=img.dtype
-        )
-    window_size_h = window_size // 2
-    img = np.pad(img, ((window_size_h, window_size_h), (window_size_h, window_size_h)))
+    cell_stack: Union[zarr.Array, np.ndarray],
+    mask_thumbnails: Optional[Union[zarr.Array, np.ndarray]] = None,
+    create_mask_thumbnails: bool = False,
+) -> Union[np.ndarray, zarr.Array]:
     for i, c in enumerate(cell_data.itertuples()):
         centroids = np.array([c.Y_centroid, c.X_centroid]).astype(int)
-        cell_stack[i, :, :] = img[
+        thumbnail = img[
             centroids[0] : centroids[0] + window_size,
             centroids[1] : centroids[1] + window_size,
         ]
+        if create_mask_thumbnails:
+            thumbnail = thumbnail == c.CellID
+        cell_stack[i, :, :] = thumbnail
         if mask_thumbnails is not None:
             cell_stack[i, :, :] *= mask_thumbnails[i]
     return cell_stack
 
 
+def cut_cells_chunked(
+    img: np.ndarray,
+    cell_data: pd.DataFrame,
+    window_size: int,
+    cell_stack: zarr.Array,
+    dtype: np.dtype,
+    mask_thumbnails: Optional[zarr.Array] = None,
+    create_mask_thumbnails: bool = False,
+    channel_index: Optional[int] = None,
+) -> None:
+    cell_chunk_size = cell_stack.chunks[1] if len(cell_stack.chunks) == 4 else cell_stack.chunks[0]
+    n_cells = len(cell_data)
+    window_size_h = window_size // 2
+    img = np.pad(img, ((window_size_h, window_size_h), (window_size_h, window_size_h)))
+    # Iterate over slices of the data equal to the chunk size in the cell dimension
+    for i, (s, e) in enumerate(
+        pairwise(
+            itertools.chain(range(0, n_cells - 1, cell_chunk_size), [n_cells - 1])
+        )
+    ):
+        if i % 1000 == 0:
+            logging.info(f"Processed {s} cells")
+        # logging.debug(f"Processing chunk {i} with cells {s} - {e}")
+        cell_data_c = cell_data.iloc[s:e]
+        mask_thumbnails_c = None
+        if mask_thumbnails is not None:
+            mask_thumbnails_c = mask_thumbnails[s:e, ...]
+        cell_stack_c = np.empty((e - s, window_size, window_size), dtype=dtype)
+        cut_cells(
+            img,
+            cell_data_c,
+            window_size,
+            cell_stack_c,
+            mask_thumbnails=mask_thumbnails_c,
+            create_mask_thumbnails=create_mask_thumbnails,
+        )
+        if channel_index is not None:
+            cell_stack[channel_index, s:e, ...] = cell_stack_c
+        else:
+            cell_stack[s:e, ...] = cell_stack_c
+
+
 def cut_cells_mp(
-    image: Image,
+    image: str,
     cell_data: pd.DataFrame,
     channel_idx: int,
     window_size: int,
     cut_array: zarr.Array,
-    mask_thumbnails: Optional[str] = None,
+    mask_thumbnails: Optional[zarr.Array] = None,
 ) -> None:
-    img = image.get_channel(channel_idx)
-    if mask_thumbnails is not None:
-        mask_thumbnails = np.load(mask_thumbnails)
-    cell_stack = cut_cells(img, cell_data, window_size, mask_thumbnails=mask_thumbnails)
-    cut_array[channel_idx, ...] = cell_stack
+    logging.info(f"Loading channel {channel_idx}")
+    img = Image(image).get_channel(channel_idx)
+    cut_cells_chunked(
+        img,
+        cell_data,
+        window_size,
+        cut_array,
+        dtype=img.dtype,
+        mask_thumbnails=mask_thumbnails,
+        channel_index=channel_idx,
+    )
 
 
 def find_bbox_size(segmentation_mask: np.ndarray) -> int:
@@ -91,8 +148,10 @@ def process_all_channels(
     mask_cells: bool = True,
     processes: int = 1,
 ) -> None:
+    logging.info("Loading segmentation mask")
     segmentation_mask_img = segmentation_mask.get_channel(0)
     # Check if all cell IDs present in the CSV file are also represented in the segmentation mask
+    logging.info("Check consistency of cell IDs")
     cell_ids_in_segmentation_mask = np.unique(segmentation_mask_img)
     n_not_in_segmentation_mask = set(cell_data["CellID"]) - set(
         cell_ids_in_segmentation_mask
@@ -121,33 +180,30 @@ def process_all_channels(
     )
     mask_thumbnails = None
     if mask_cells:
-        window_size_h = window_size // 2
-        segmentation_mask_img_padded = np.pad(
+        logging.info("Cutting cell mask thumbnails")
+        mask_thumbnails = zarr.open(
+            f"{destination}_thumbnails",
+            mode="w",
+            shape=(cell_data.shape[0], window_size, window_size),
+            dtype=np.bool_,
+            compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE),
+            chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
+        )
+        cut_cells_chunked(
             segmentation_mask_img,
-            ((window_size_h, window_size_h), (window_size_h, window_size_h)),
+            cell_data,
+            window_size,
+            mask_thumbnails,
+            dtype=np.bool_,
+            create_mask_thumbnails=True,
         )
-        mask_thumbnails = np.empty(
-            (cell_data.shape[0], window_size, window_size), dtype=np.bool_
-        )
-        for i, c in enumerate(cell_data.itertuples()):
-            centroids = np.array([c.Y_centroid, c.X_centroid]).astype(int)
-            mask_thumbnails[i, :, :] = (
-                segmentation_mask_img_padded[
-                    centroids[0] : centroids[0] + window_size,
-                    centroids[1] : centroids[1] + window_size,
-                ]
-                == c.CellID
-            )
-        mask_temp = tempfile.mkstemp(suffix=".npy")
-        np.save(mask_temp[1], mask_thumbnails)
-        mask_thumbnails = mask_temp[1]
     # We can use a with statement to ensure threads are cleaned up promptly
-    with concurrent.futures.ThreadPoolExecutor(max_workers=processes) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=processes) as executor:
         # Start the load operations and mark each future with its URL
         futures = {
             executor.submit(
                 cut_cells_mp,
-                img,
+                img.path,
                 cell_data,
                 i,
                 window_size,

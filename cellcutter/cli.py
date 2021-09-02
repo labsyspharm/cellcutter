@@ -23,9 +23,7 @@ from . import cut as cut_mod
     help="Fill every pixel not occupied by the target cell with zeros.",
 )
 @click.option(
-    "-t",
-    default=1,
-    help="Number of threads used.",
+    "-t", default=1, help="Number of threads used.",
 )
 def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cells, t):
     """Cut out thumbnail images of all cells.
@@ -46,11 +44,16 @@ def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cell
     The output is a Zarr array with the dimensions [#channels, #cells, window_size, window_size].
     """
     logging.basicConfig(
-        format="%(asctime)s %(levelname)s: %(message)s", level=logging.INFO
+        format="%(threadName)s %(asctime)s %(levelname)s: %(message)s",
+        level=logging.INFO,
     )
     img = cut_mod.Image(image)
     segmentation_mask_img = cut_mod.Image(segmentation_mask)
-    cell_data_df = pd.read_csv(cell_data)
+    logging.info("Loading cell data CSV")
+    cell_data_df = pd.read_csv(
+        cell_data, usecols=["CellID", "X_centroid", "Y_centroid"]
+    )
+    logging.info(f"Processing {len(cell_data_df)} cells")
     cut_mod.process_all_channels(
         img,
         segmentation_mask_img,
