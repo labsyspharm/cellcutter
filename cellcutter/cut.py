@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -57,6 +57,12 @@ def find_bbox_size(segmentation_mask: np.ndarray) -> int:
     )
 
 
+def find_chunk_size(shape, sizeof: int, target_size: int = 32 * 1024 * 1024):
+    total_size = np.prod(shape) * sizeof
+    n_cell_chunks = total_size / (target_size * shape[0])
+    return (1, np.ceil(shape[1] / n_cell_chunks).astype(int), shape[2], shape[3])
+
+
 def save_cells_all_channels(
     img: Image,
     segmentation_mask: Image,
@@ -68,21 +74,30 @@ def save_cells_all_channels(
     segmentation_mask_img = segmentation_mask.get_channel(0)
     # Check if all cell IDs present in the CSV file are also represented in the segmentation mask
     cell_ids_in_segmentation_mask = np.unique(segmentation_mask_img)
-    n_not_in_segmentation_mask = set(cell_data["CellID"]) - set(cell_ids_in_segmentation_mask)
+    n_not_in_segmentation_mask = set(cell_data["CellID"]) - set(
+        cell_ids_in_segmentation_mask
+    )
     if len(n_not_in_segmentation_mask) > 0:
-        raise SystemError(f"{len(n_not_in_segmentation_mask)} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask.")
+        raise SystemError(
+            f"{len(n_not_in_segmentation_mask)} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask."
+        )
     # Remove cells from segmentation mask that are not present in the CSV
     segmentation_mask_img[~np.isin(segmentation_mask_img, cell_data["CellID"])] = 0
     if window_size is None:
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask_img)
         logging.info(f"Use window size {window_size}")
+    array_shape = (img.n_channels, cell_data.shape[0], window_size, window_size)
+    array_dtype = img.get_channel(0).dtype
+    array_chunks = find_chunk_size(array_shape, np.dtype(array_dtype).itemsize)
+    logging.info(f"Using {array_chunks} chunks")
     file = zarr.open(
         destination,
         mode="w",
-        shape=(img.n_channels, cell_data.shape[0], window_size, window_size),
-        dtype=img.get_channel(0).dtype,
+        shape=array_shape,
+        dtype=array_dtype,
         compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE),
+        chunks=array_chunks,
     )
     mask_thumbnails = None
     if mask_cells:
@@ -107,10 +122,7 @@ def save_cells_all_channels(
         logging.info(f"Processing channel {i}")
         channel_img = img.get_channel(i)
         cell_stack = cut_cells(
-            channel_img,
-            cell_data,
-            window_size,
-            mask_thumbnails=mask_thumbnails,
+            channel_img, cell_data, window_size, mask_thumbnails=mask_thumbnails,
         )
         logging.info(f"Writing thumbnails for channel {i}")
         file[i, ...] = cell_stack
