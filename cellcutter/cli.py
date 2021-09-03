@@ -12,6 +12,9 @@ from . import cut as cut_mod
 @click.argument("cell_data", type=click.Path(exists=True, dir_okay=False))
 @click.argument("destination", type=click.Path())
 @click.option(
+    "-t", default=1, help="Number of threads used.",
+)
+@click.option(
     "--window-size",
     default=None,
     type=click.INT,
@@ -23,9 +26,22 @@ from . import cut as cut_mod
     help="Fill every pixel not occupied by the target cell with zeros.",
 )
 @click.option(
-    "-t", default=1, help="Number of threads used.",
+    "--chunk-size",
+    default=32,
+    type=click.INT,
+    help="Target uncompressed chunk size in Mb."
+    "Default 32Mb. With datasets that compress well increasing this might help performance.",
 )
-def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cells, t):
+def cut(
+    image,
+    segmentation_mask,
+    cell_data,
+    destination,
+    window_size,
+    mask_cells,
+    t,
+    chunk_size,
+):
     """Cut out thumbnail images of all cells.
 
     IMAGE - Path to image in TIFF format, potentially with multiple channels.
@@ -62,4 +78,5 @@ def cut(image, segmentation_mask, cell_data, destination, window_size, mask_cell
         window_size=window_size,
         mask_cells=mask_cells,
         processes=t,
+        target_chunk_size=chunk_size * 1024 * 1024,
     )

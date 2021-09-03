@@ -147,6 +147,7 @@ def process_all_channels(
     window_size: Optional[int],
     mask_cells: bool = True,
     processes: int = 1,
+    target_chunk_size: int = 32*1024*1024
 ) -> None:
     logging.info("Loading segmentation mask")
     segmentation_mask_img = segmentation_mask.get_channel(0)
@@ -168,14 +169,14 @@ def process_all_channels(
         logging.info(f"Use window size {window_size}")
     array_shape = (img.n_channels, cell_data.shape[0], window_size, window_size)
     array_dtype = img.get_channel(0).dtype
-    array_chunks = find_chunk_size(array_shape, np.dtype(array_dtype).itemsize)
+    array_chunks = find_chunk_size(array_shape, np.dtype(array_dtype).itemsize, target_size=target_chunk_size)
     logging.info(f"Using {array_chunks} chunks")
     file = zarr.open(
         destination,
         mode="w",
         shape=array_shape,
         dtype=array_dtype,
-        compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE),
+        compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.SHUFFLE),
         chunks=array_chunks,
     )
     mask_thumbnails = None
@@ -186,7 +187,7 @@ def process_all_channels(
             mode="w",
             shape=(cell_data.shape[0], window_size, window_size),
             dtype=np.bool_,
-            compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE),
+            compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.SHUFFLE),
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
         )
         cut_cells_chunked(
