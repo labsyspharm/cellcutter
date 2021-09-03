@@ -30,15 +30,18 @@ cut_cells [OPTIONS] IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION
   DESTINATION - Path to a new directory where cell thumbnails will be stored
   in Zarr format (https://zarr.readthedocs.io/en/stable/index.html).
 
-  The output is a Zarr array with the dimensions [#channels, #cells,
-  window_size, window_size]
+  The output is a Zarr array with dimensions [#channels, #cells, window_size,
+  window_size].
 
 Options:
+  -p INTEGER                      Number of processes run in parallel.
   --window-size INTEGER           Size of the cell thumbnail in pixels.
                                   Defaults to size of largest cell.
   --mask-cells / --dont-mask-cells
                                   Fill every pixel not occupied by the target
-                                  cell with zeros.
+                                  cell with zeros.  [default: mask-cells]
+  --chunk-size INTEGER            Desired uncompressed chunk size in MB.
+                                  [default: 32]
   --help                          Show this message and exit.
 ```
 
