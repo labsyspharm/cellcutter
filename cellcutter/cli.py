@@ -33,6 +33,7 @@ from . import cut as cut_mod
     type=click.INT,
     help="Desired uncompressed chunk size in MB.",
 )
+@click.version_option()
 def cut(
     image,
     segmentation_mask,

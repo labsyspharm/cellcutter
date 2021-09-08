@@ -75,10 +75,10 @@ def cut_cells_chunked(
     window_size_h = window_size // 2
     img = np.pad(img, ((window_size_h, window_size_h), (window_size_h, window_size_h)))
     # Iterate over slices of the data equal to the chunk size in the cell dimension
-    for i, (s, e) in enumerate(
-        pairwise(itertools.chain(range(0, n_cells, cell_chunk_size), [n_cells]))
+    for s, e in pairwise(
+        itertools.chain(range(0, n_cells, cell_chunk_size), [n_cells])
     ):
-        if i % 1000 == 0:
+        if s % 100000 <= cell_chunk_size:
             logging.info(f"Processed {s} cells")
         # logging.debug(f"Processing chunk {i} with cells {s} - {e}")
         cell_data_c = cell_data.iloc[s:e]
