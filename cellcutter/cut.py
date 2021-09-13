@@ -1,7 +1,7 @@
 import logging
 import concurrent.futures
 import itertools
-from typing import Optional, Union
+from typing import Optional, Union, Iterable
 
 import numpy as np
 import pandas as pd
@@ -65,7 +65,7 @@ def cut_cells_chunked(
     dtype: np.dtype,
     mask_thumbnails: Optional[zarr.Array] = None,
     create_mask_thumbnails: bool = False,
-    channel_index: Optional[int] = None,
+    zarr_channel_index: Optional[int] = None,
 ) -> None:
     "Cut cells from a given image, in chunks aligned with the output array, and write them into the given Zarr or Numpy array."
     cell_chunk_size = (
@@ -94,8 +94,8 @@ def cut_cells_chunked(
             mask_thumbnails=mask_thumbnails_c,
             create_mask_thumbnails=create_mask_thumbnails,
         )
-        if channel_index is not None:
-            cell_stack[channel_index, s:e, ...] = cell_stack_c
+        if zarr_channel_index is not None:
+            cell_stack[zarr_channel_index, s:e, ...] = cell_stack_c
         else:
             cell_stack[s:e, ...] = cell_stack_c
 
@@ -103,14 +103,17 @@ def cut_cells_chunked(
 def cut_cells_mp(
     image: str,
     cell_data: pd.DataFrame,
-    channel_idx: int,
+    channel_index: int,
     window_size: int,
     cut_array: zarr.Array,
     mask_thumbnails: Optional[zarr.Array] = None,
+    zarr_channel_index: Optional[int] = None,
 ) -> None:
     "Load single channel from the given TIFF file and cut out cells."
-    logging.info(f"Loading channel {channel_idx}")
-    img = Image(image).get_channel(channel_idx)
+    logging.info(f"Loading channel {channel_index}")
+    img = Image(image).get_channel(channel_index)
+    if zarr_channel_index is None:
+        zarr_channel_index = channel_index
     cut_cells_chunked(
         img,
         cell_data,
@@ -118,7 +121,7 @@ def cut_cells_mp(
         cut_array,
         dtype=img.dtype,
         mask_thumbnails=mask_thumbnails,
-        channel_index=channel_idx,
+        zarr_channel_index=zarr_channel_index,
     )
 
 
@@ -150,6 +153,7 @@ def process_all_channels(
     mask_cells: bool = True,
     processes: int = 1,
     target_chunk_size: int = 32 * 1024 * 1024,
+    channels: Optional[Iterable[int]] = None,
 ) -> None:
     "Given an image, segmentation mask, and cell positions, cut out cells and write a stack of cell thumbnails in Zarr format."
     logging.info("Loading segmentation mask")
@@ -161,7 +165,7 @@ def process_all_channels(
         cell_ids_in_segmentation_mask
     )
     if len(n_not_in_segmentation_mask) > 0:
-        raise SystemError(
+        raise ValueError(
             f"{len(n_not_in_segmentation_mask)} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask."
         )
     # Remove cells from segmentation mask that are not present in the CSV
@@ -170,7 +174,13 @@ def process_all_channels(
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask_img)
         logging.info(f"Use window size {window_size}")
-    array_shape = (img.n_channels, cell_data.shape[0], window_size, window_size)
+    if channels is None:
+        channels = np.arange(img.n_channels)
+    else:
+        channels = np.unique(np.array(channels))
+    if channels[0] < 0 or channels[-1] >= img.n_channels:
+        raise ValueError(f"Channel indices must be between 0 and {img.n_channels - 1}.")
+    array_shape = (len(channels), cell_data.shape[0], window_size, window_size)
     array_dtype = img.get_channel(0).dtype
     array_chunks = find_chunk_size(
         array_shape, np.dtype(array_dtype).itemsize, target_size=target_chunk_size
@@ -209,12 +219,13 @@ def process_all_channels(
                 cut_cells_mp,
                 img.path,
                 cell_data,
-                i,
+                c,
                 window_size,
                 file,
                 mask_thumbnails=mask_thumbnails,
-            ): i
-            for i in range(img.n_channels)
+                zarr_channel_index=i,
+            ): c
+            for i, c in enumerate(channels)
         }
         for future in concurrent.futures.as_completed(futures):
             i = futures[future]
@@ -222,4 +233,4 @@ def process_all_channels(
                 future.result()
                 logging.info(f"Channel {i} done")
             except Exception as ex:
-                logging.error(f"Future {i} generated an exception: {ex}")
+                logging.error(f"Error processing channel {i}: {ex}")
