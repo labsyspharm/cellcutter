@@ -58,12 +58,44 @@ optional arguments:
 
 ## Example
 
+Example data are available for [download at mcmicro.org](https://mcmicro.org/datasets.html).
+
 ```
 cut_cells exemplar-001/registration/exemplar-001.ome.tif \
   exemplar-001/segmentation/unmicst-exemplar-001/cellMask.tif \
   exemplar-001/quantification/unmicst-exemplar-001_cellMask.csv \
   cellMaskThumbnails.zarr
 ```
+
+## Reading the zarr array output
+
+```python
+import zarr
+from matplotlib import pyplot as plt
+```
+
+```python
+x = zarr.open("cellMaskThumbnails.zarr", mode = "r")
+```
+
+    <zarr.core.Array (12, 9522, 46, 46) uint16 read-only>
+
+```python
+plt.imshow(x[0, 0, ...])
+```
+
+![png](docs/assets/example_thumbnail.png)
+
+```python
+plt.figure(figsize=(10, 10))
+for i in range(64):
+    ax = plt.subplot(8, 8, i + 1)
+    ax.axis("off")
+    ax.imshow(x[0, i, ...])
+plt.tight_layout()
+```
+
+![png](docs/assets/example_thumbnails.png)
 
 ## Funding
 
