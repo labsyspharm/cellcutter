@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 
 import numpy as np
 import pandas as pd
@@ -81,6 +82,12 @@ def cut():
         "-p", default=1, type=int, help="Number of processes run in parallel.",
     )
     parser.add_argument(
+        "-z",
+        default=False,
+        action=BooleanOptionalAction,
+        help="Store thumbnails in a single zip file instead of a directory.",
+    )
+    parser.add_argument(
         "--window-size",
         default=None,
         type=int,
@@ -110,7 +117,7 @@ def cut():
     args = parser.parse_intermixed_args()
     logging.basicConfig(
         format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
-        level=logging.INFO,
+        level=os.environ.get("LOGLEVEL", "WARNING").upper(),
     )
     logging.info(args)
     img = cut_mod.Image(args.IMAGE)
@@ -135,5 +142,6 @@ def cut():
         processes=args.p,
         target_chunk_size=args.chunk_size * 1024 * 1024,
         channels=channels,
+        use_zip=args.z,
     )
     logging.info("Done")
