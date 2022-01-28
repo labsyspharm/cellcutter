@@ -39,6 +39,8 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   -p P                  Number of processes run in parallel.
+  -z                    Store thumbnails in a single zip file instead of a
+                        directory. (default: False)
   --window-size WINDOW_SIZE
                         Size of the cell thumbnail in pixels. Defaults to size
                         of largest cell.
