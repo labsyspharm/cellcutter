@@ -30,7 +30,7 @@ class BooleanOptionalAction(argparse.Action):
                 option_string = prefix + option_string[2:]
                 _option_strings.append(option_string)
         if help is not None and default is not None:
-            help += f" (default: {default})"
+            help += f" (Default: {default})"
         super().__init__(
             option_strings=_option_strings,
             dest=dest,
@@ -57,6 +57,8 @@ def cut():
 
         Thumbnails will be stored as Zarr array (https://zarr.readthedocs.io/en/stable/index.html)
         with dimensions [#channels, #cells, window_size, window_size].
+
+        The chunking shape greatly influences performance  ttps://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
         """,
     )
     parser.add_argument(
@@ -97,14 +99,22 @@ def cut():
         "--mask-cells",
         default=True,
         action=BooleanOptionalAction,
-        help="Fill every pixel not occupied by the target cell with zeros. (Default: --mask-cells)",
+        help="Fill every pixel not occupied by the target cell with zeros.",
     )
     parser.add_argument(
         "--chunk-size",
         default=32,
         type=int,
-        help="Desired uncompressed chunk size in MB."
-        "See https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations. (Default: 32)",
+        help="Desired uncompressed chunk size in MB. "
+        "(See https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations) "
+        "Since the other chunk dimensions are fixed as [#channels, #cells, window_size, window_size], "
+        "this argument determines the number of cells per chunk. (Default: 32 MB)",
+    )
+    parser.add_argument(
+        "--cache-size",
+        default=10 * 1024,
+        type=int,
+        help="Cache size for reading image tiles in MB. (Default: 10 * 1024 MB)",
     )
     parser.add_argument(
         "--channels",
@@ -112,12 +122,12 @@ def cut():
         nargs="*",
         default=None,
         help="Indices of channels (1-based) to include in the output e.g., --channels 1 3 5. "
-        "Default is to include all channels. This option has to *after* the positional arguments.",
+        "Default is to include all channels. This option must be *after* all positional arguments.",
     )
     args = parser.parse_intermixed_args()
     logging.basicConfig(
         format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
-        level=os.environ.get("LOGLEVEL", "WARNING").upper(),
+        level=os.environ.get("LOGLEVEL", "INFO").upper(),
     )
     logging.info(args)
     img = cut_mod.Image(args.IMAGE)
@@ -143,5 +153,6 @@ def cut():
         target_chunk_size=args.chunk_size * 1024 * 1024,
         channels=channels,
         use_zip=args.z,
+        cache_size=args.cache_size * 1024 * 1024,
     )
     logging.info("Done")

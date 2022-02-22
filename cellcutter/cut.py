@@ -2,8 +2,9 @@ import logging
 import concurrent.futures
 import itertools
 import pathlib
+from tkinter import W
 import zipfile
-from typing import Optional, Union, Iterable
+from typing import Optional, Union, Iterable, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,13 @@ def pairwise(iterable):
     return zip(a, b)
 
 
+def range_all(start, stop, step):
+    "Like range() but with stop included"
+    for i in range(start, stop, step):
+        yield i
+    yield stop
+
+
 def zip_dir(dir: Union[pathlib.Path, str], zip_file: Union[pathlib.Path, str]) -> None:
     "Zip the contents of the given directory into a ZIP file."
     dir = pathlib.Path(dir)
@@ -28,15 +36,52 @@ def zip_dir(dir: Union[pathlib.Path, str], zip_file: Union[pathlib.Path, str]) -
         for f in dir.rglob("*"):
             zf.write(f, f.relative_to(dir))
 
+def padded_subset(img: Union[zarr.Array, np.ndarray], x: int, y: int, window_size: Tuple[int, int]) -> np.ndarray:
+    "Return a padded subset of the image with the given window size"
+    wh = img.shape[-2:]
+    s = (
+        (x - window_size[0] // 2, x + window_size[0] // 2),
+        (y - window_size[1] // 2, y + window_size[1] // 2),
+    )
+    s_img = (
+        (max(0, s[0][0]), min(wh[0], s[0][1])),
+        (max(0, s[1][0]), min(wh[1], s[1][1])),
+    )
+    s_out = (
+        (
+            max(0, -s[0][0]),
+            min(window_size[0], window_size[0] - s[0][1] + wh[0]),
+        ),
+        (
+            max(0, -s[1][0]),
+            min(window_size[1], window_size[1] - s[1][1] + wh[1]),
+        ),
+    )
+    out = np.zeros(
+        img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype
+    )
+    out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img[
+        ..., s_img[0][0] : s_img[0][1], s_img[1][0] : s_img[1][1]
+    ]
+    return out
+
 
 class Image:
-    def __init__(self, path: str):
+    def __init__(self, path: str, cache_size: int = 1024 * 1024 * 1024):
         self.path = path
         self.image = tifffile.TiffFile(path)
         self.base_series = self.image.series[0]
+        self.cache_size = cache_size
+        self.zarr = zarr.open(
+            zarr.LRUStoreCache(self.image.aszarr(series=0), self.cache_size), mode="r"
+        )
 
     def get_channel(self, channel_index: int) -> np.ndarray:
         return self.base_series.pages[channel_index].asarray()
+
+    @property
+    def width_height(self) -> Tuple[int, int]:
+        return tuple(self.base_series.shape)[-2:]
 
     @property
     def n_channels(self) -> int:
@@ -45,9 +90,13 @@ class Image:
         else:
             return self.base_series.shape[0]
 
+    @property
+    def dtype(self):
+        self.base_series.pages[0].dtype
+
 
 def cut_cells(
-    img: np.ndarray,
+    img: Union[zarr.Array, np.ndarray],
     cell_data: pd.DataFrame,
     window_size: int,
     cell_stack: Union[zarr.Array, np.ndarray],
@@ -57,83 +106,33 @@ def cut_cells(
     "Cut cells from a given image and write them into the given Zarr or Numpy array."
     for i, c in enumerate(cell_data.itertuples()):
         centroids = np.array([c.Y_centroid, c.X_centroid]).astype(int)
-        thumbnail = img[
-            centroids[0] : centroids[0] + window_size,
-            centroids[1] : centroids[1] + window_size,
-        ]
+        thumbnail = padded_subset(
+            img, centroids[0], centroids[1], window_size=(window_size, window_size)
+        )
         if create_mask_thumbnails:
             thumbnail = thumbnail == c.CellID
-        cell_stack[i, :, :] = thumbnail
+        cell_stack[..., i, :, :] = thumbnail
         if mask_thumbnails is not None:
-            cell_stack[i, :, :] *= mask_thumbnails[i]
+            cell_stack[..., i, :, :] *= mask_thumbnails[i]
 
 
-def cut_cells_chunked(
-    img: np.ndarray,
-    cell_data: pd.DataFrame,
-    window_size: int,
-    cell_stack: zarr.Array,
-    dtype: np.dtype,
-    mask_thumbnails: Optional[zarr.Array] = None,
-    create_mask_thumbnails: bool = False,
-    zarr_channel_index: Optional[int] = None,
-) -> None:
-    "Cut cells from a given image, in chunks aligned with the output array, and write them into the given Zarr or Numpy array."
-    cell_chunk_size = (
-        cell_stack.chunks[1] if len(cell_stack.chunks) == 4 else cell_stack.chunks[0]
-    )
-    n_cells = len(cell_data)
-    window_size_h = window_size // 2
-    img = np.pad(img, ((window_size_h, window_size_h), (window_size_h, window_size_h)))
-    # Iterate over slices of the data equal to the chunk size in the cell dimension
-    for s, e in pairwise(
-        itertools.chain(range(0, n_cells, cell_chunk_size), [n_cells])
-    ):
-        if s % 100000 <= cell_chunk_size:
-            logging.info(f"Processed {s} cells")
-        # logging.debug(f"Processing chunk {i} with cells {s} - {e}")
-        cell_data_c = cell_data.iloc[s:e]
-        mask_thumbnails_c = None
-        if mask_thumbnails is not None:
-            mask_thumbnails_c = mask_thumbnails[s:e, ...]
-        cell_stack_c = np.empty((e - s, window_size, window_size), dtype=dtype)
-        cut_cells(
-            img,
-            cell_data_c,
-            window_size,
-            cell_stack_c,
-            mask_thumbnails=mask_thumbnails_c,
-            create_mask_thumbnails=create_mask_thumbnails,
-        )
-        if zarr_channel_index is not None:
-            cell_stack[zarr_channel_index, s:e, ...] = cell_stack_c
-        else:
-            cell_stack[s:e, ...] = cell_stack_c
-
-
-def cut_cells_mp(
+def cut_cell_range(
     image: str,
     cell_data: pd.DataFrame,
-    channel_index: int,
+    cell_range: Tuple[int, int],
     window_size: int,
     cut_array: zarr.Array,
     mask_thumbnails: Optional[zarr.Array] = None,
-    zarr_channel_index: Optional[int] = None,
+    cache_size: int = 1024 * 1024 * 1024,
 ) -> None:
     "Load single channel from the given TIFF file and cut out cells."
-    logging.info(f"Loading channel {channel_index}")
-    img = Image(image).get_channel(channel_index)
-    if zarr_channel_index is None:
-        zarr_channel_index = channel_index
-    cut_cells_chunked(
-        img,
-        cell_data,
-        window_size,
-        cut_array,
-        dtype=img.dtype,
-        mask_thumbnails=mask_thumbnails,
-        zarr_channel_index=zarr_channel_index,
+    image = Image(image, cache_size=cache_size)
+    cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
+    cell_stack_temp = np.empty(
+        (image.n_channels, cell_range[1] - cell_range[0], window_size, window_size), dtype=image.dtype
     )
+    cut_cells(image.zarr, cell_data_subset, window_size, cell_stack_temp, mask_thumbnails)
+    cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
 
 
 def find_bbox_size(segmentation_mask: np.ndarray) -> int:
@@ -144,15 +143,14 @@ def find_bbox_size(segmentation_mask: np.ndarray) -> int:
     )
 
 
-def find_chunk_size(shape, sizeof: int, target_size: int = 32 * 1024 * 1024):
-    """Given a array of shape [#channels, #cells, height, width] find chunk pattern of the form [1, x, height, width]
+def find_chunk_size(
+    shape: Tuple[int], sizeof: int, target_bytes: int = 32 * 1024 * 1024
+) -> Tuple[int]:
+    """Given a array of shape [#channels, #cells, height, width] find chunk pattern of the form [n_channels, x, height, width]
     resulting in chunks of the given size.
     """
-    total_size = np.prod(shape) * sizeof
-    n_cell_chunks = total_size / (target_size * shape[0])
-    return tuple(
-        int(x) for x in (1, np.ceil(shape[1] / n_cell_chunks), shape[2], shape[3])
-    )
+    cells_per_chunk = target_bytes // (shape[0] * shape[2] * shape[3] * sizeof)
+    return tuple(int(x) for x in (shape[0], cells_per_chunk, shape[2], shape[3]))
 
 
 def process_all_channels(
@@ -166,6 +164,7 @@ def process_all_channels(
     target_chunk_size: int = 32 * 1024 * 1024,
     channels: Optional[Iterable[int]] = None,
     use_zip: bool = False,
+    cache_size: int = 1024 * 1024 * 1024,
 ) -> None:
     "Given an image, segmentation mask, and cell positions, cut out cells and write a stack of cell thumbnails in Zarr format."
     destination = pathlib.Path(destination)
@@ -196,9 +195,8 @@ def process_all_channels(
     if channels[0] < 0 or channels[-1] >= img.n_channels:
         raise ValueError(f"Channel indices must be between 0 and {img.n_channels - 1}.")
     array_shape = (len(channels), cell_data.shape[0], window_size, window_size)
-    array_dtype = img.get_channel(0).dtype
     array_chunks = find_chunk_size(
-        array_shape, np.dtype(array_dtype).itemsize, target_size=target_chunk_size
+        array_shape, np.dtype(img.dtype).itemsize, target_bytes=target_chunk_size
     )
     logging.info(f"Using chunks of shape {array_chunks}")
     # If writing to a zip file, create a temporary directory to store the zarr files
@@ -211,7 +209,7 @@ def process_all_channels(
         store=store,
         overwrite=True,
         shape=array_shape,
-        dtype=array_dtype,
+        dtype=img.dtype,
         compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
         chunks=array_chunks,
     )
@@ -231,12 +229,11 @@ def process_all_channels(
             compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
         )
-        cut_cells_chunked(
+        cut_cells(
             segmentation_mask_img,
             cell_data,
             window_size,
             mask_thumbnails,
-            dtype=np.bool_,
             create_mask_thumbnails=True,
         )
         # If writing to zip files was requested zipping up the directory now
@@ -246,26 +243,30 @@ def process_all_channels(
                 mask_store.path, destination_mask,
             )
     with concurrent.futures.ProcessPoolExecutor(max_workers=processes) as executor:
+        n_cells = array_shape[1]
         futures = {
             executor.submit(
-                cut_cells_mp,
+                cut_cell_range,
                 img.path,
-                cell_data,
-                c,
-                window_size,
-                file,
+                cell_data=cell_data,
+                cell_range=cell_range,
+                window_size=window_size,
+                cut_array=file,
                 mask_thumbnails=mask_thumbnails,
-                zarr_channel_index=i,
-            ): c
-            for i, c in enumerate(channels)
+                cache_size=cache_size,
+            ): cell_range
+            for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
         }
         for future in concurrent.futures.as_completed(futures):
-            i = futures[future]
+            cell_range = futures[future]
             try:
                 future.result()
-                logging.info(f"Channel {i} done")
+                logging.info(f"Cells {cell_range[0]}-{cell_range[1]} done")
             except Exception as ex:
-                logging.error(f"Error processing channel {i}: {ex}")
+                logging.error(
+                    f"Error processing cells {cell_range[0]}-{cell_range[1]}: {ex}"
+                )
+                raise ex
     if use_zip:
         logging.info("Zipping up thumbnails")
         logging.debug(f"Zipping up to {destination}")
