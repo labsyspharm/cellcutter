@@ -1,98 +1,17 @@
 import logging
 import concurrent.futures
-import itertools
 import pathlib
-from tkinter import W
-import zipfile
 from typing import Optional, Union, Iterable, Tuple
+from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.managers import SharedMemoryManager
 
 import numpy as np
 import pandas as pd
-import tifffile
 import zarr
 from numcodecs import Blosc
 from skimage.measure import regionprops_table
 
-
-def pairwise(iterable):
-    "s -> (s0,s1), (s1,s2), (s2, s3), ..."
-    a, b = itertools.tee(iterable)
-    next(b, None)
-    return zip(a, b)
-
-
-def range_all(start, stop, step):
-    "Like range() but with stop included"
-    for i in range(start, stop, step):
-        yield i
-    yield stop
-
-
-def zip_dir(dir: Union[pathlib.Path, str], zip_file: Union[pathlib.Path, str]) -> None:
-    "Zip the contents of the given directory into a ZIP file."
-    dir = pathlib.Path(dir)
-    # Don't compress the ZIP file. Zarr arrays are already compressed.
-    with zipfile.ZipFile(zip_file, "w", compression=zipfile.ZIP_STORED) as zf:
-        for f in dir.rglob("*"):
-            zf.write(f, f.relative_to(dir))
-
-def padded_subset(img: Union[zarr.Array, np.ndarray], x: int, y: int, window_size: Tuple[int, int]) -> np.ndarray:
-    "Return a padded subset of the image with the given window size"
-    wh = img.shape[-2:]
-    s = (
-        (x - window_size[0] // 2, x + window_size[0] // 2),
-        (y - window_size[1] // 2, y + window_size[1] // 2),
-    )
-    s_img = (
-        (max(0, s[0][0]), min(wh[0], s[0][1])),
-        (max(0, s[1][0]), min(wh[1], s[1][1])),
-    )
-    s_out = (
-        (
-            max(0, -s[0][0]),
-            min(window_size[0], window_size[0] - s[0][1] + wh[0]),
-        ),
-        (
-            max(0, -s[1][0]),
-            min(window_size[1], window_size[1] - s[1][1] + wh[1]),
-        ),
-    )
-    out = np.zeros(
-        img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype
-    )
-    out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img[
-        ..., s_img[0][0] : s_img[0][1], s_img[1][0] : s_img[1][1]
-    ]
-    return out
-
-
-class Image:
-    def __init__(self, path: str, cache_size: int = 1024 * 1024 * 1024):
-        self.path = path
-        self.image = tifffile.TiffFile(path)
-        self.base_series = self.image.series[0]
-        self.cache_size = cache_size
-        self.zarr = zarr.open(
-            zarr.LRUStoreCache(self.image.aszarr(series=0), self.cache_size), mode="r"
-        )
-
-    def get_channel(self, channel_index: int) -> np.ndarray:
-        return self.base_series.pages[channel_index].asarray()
-
-    @property
-    def width_height(self) -> Tuple[int, int]:
-        return tuple(self.base_series.shape)[-2:]
-
-    @property
-    def n_channels(self) -> int:
-        if len(self.base_series.shape) == 2:
-            return 1
-        else:
-            return self.base_series.shape[0]
-
-    @property
-    def dtype(self):
-        self.base_series.pages[0].dtype
+from .utils import padded_subset, range_all, pairwise, zip_dir, Image
 
 
 def cut_cells(
@@ -125,13 +44,40 @@ def cut_cell_range(
     mask_thumbnails: Optional[zarr.Array] = None,
     cache_size: int = 1024 * 1024 * 1024,
 ) -> None:
-    "Load single channel from the given TIFF file and cut out cells."
+    "Cut the given range of cells from a TIFF image and write them into the given Zarr or Numpy array."
     image = Image(image, cache_size=cache_size)
     cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
     cell_stack_temp = np.empty(
-        (image.n_channels, cell_range[1] - cell_range[0], window_size, window_size), dtype=image.dtype
+        (image.n_channels, cell_range[1] - cell_range[0], window_size, window_size),
+        dtype=image.dtype,
     )
-    cut_cells(image.zarr, cell_data_subset, window_size, cell_stack_temp, mask_thumbnails)
+    cut_cells(
+        image.zarr, cell_data_subset, window_size, cell_stack_temp, mask_thumbnails
+    )
+    cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
+
+
+def cut_cell_range_shared_mem(
+    image: str,
+    address: str,
+    cell_data: pd.DataFrame,
+    cell_range: Tuple[int, int],
+    window_size: int,
+    cut_array: zarr.Array,
+    mask_thumbnails: Optional[zarr.Array] = None,
+) -> None:
+    "Cut the given range of cells from a TIFF image in shared memory and write them into the given Zarr or Numpy array."
+    img = Image(image)
+    sm = SharedMemory(name=address)
+    img_array = np.ndarray(img.base_series.shape, dtype=img.dtype, buffer=sm.buf)
+    cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
+    cell_stack_temp = np.empty(
+        (img.n_channels, cell_range[1] - cell_range[0], window_size, window_size),
+        dtype=img.dtype,
+    )
+    cut_cells(
+        img_array, cell_data_subset, window_size, cell_stack_temp, mask_thumbnails
+    )
     cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
 
 
@@ -203,7 +149,7 @@ def process_all_channels(
     # and compress them into the zip file at the end. Solves issues with concurrent
     # access to the same zip file.
     store = zarr.DirectoryStore(str(destination)) if not use_zip else zarr.TempStore()
-    logging.debug(f"Writing thumbnails to {store.path}")
+    logging.info(f"Writing thumbnails to {store.path}")
     # Chosing low compression level for speed. Size difference is negligible.
     file = zarr.create(
         store=store,
@@ -242,21 +188,53 @@ def process_all_channels(
             zip_dir(
                 mask_store.path, destination_mask,
             )
-    with concurrent.futures.ProcessPoolExecutor(max_workers=processes) as executor:
-        n_cells = array_shape[1]
-        futures = {
-            executor.submit(
-                cut_cell_range,
-                img.path,
-                cell_data=cell_data,
-                cell_range=cell_range,
-                window_size=window_size,
-                cut_array=file,
-                mask_thumbnails=mask_thumbnails,
-                cache_size=cache_size,
-            ): cell_range
-            for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
-        }
+    n_cells = array_shape[1]
+    n_bytes_img = img.dtype.itemsize * np.prod(img.base_series.shape)
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=processes
+    ) as executor, SharedMemoryManager() as smm:
+        if n_bytes_img < cache_size:
+            logging.info(
+                f"Image size {n_bytes_img} is smaller than cache size {cache_size}. "
+                "Loading entire image into memory."
+            )
+            raw_sm = smm.SharedMemory(size=n_bytes_img)
+            img_array = np.ndarray(
+                img.base_series.shape, dtype=img.dtype, buffer=raw_sm.buf
+            )
+            img_array[...] = img.zarr[...]
+            futures = {
+                executor.submit(
+                    cut_cell_range_shared_mem,
+                    img.path,
+                    raw_sm.name,
+                    cell_data=cell_data,
+                    cell_range=cell_range,
+                    window_size=window_size,
+                    cut_array=file,
+                    mask_thumbnails=mask_thumbnails,
+                ): cell_range
+                for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
+            }
+        else:
+            logging.info(
+                f"Image size {n_bytes_img} is larger than cache size {cache_size}. "
+                "This results in many reads from disk and will be slow. Consider "
+                "increasing the cache size."
+            )
+            futures = {
+                executor.submit(
+                    cut_cell_range,
+                    img.path,
+                    cell_data=cell_data,
+                    cell_range=cell_range,
+                    window_size=window_size,
+                    cut_array=file,
+                    mask_thumbnails=mask_thumbnails,
+                    cache_size=cache_size // processes,
+                ): cell_range
+                for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
+            }
         for future in concurrent.futures.as_completed(futures):
             cell_range = futures[future]
             try:
