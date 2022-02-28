@@ -108,17 +108,14 @@ Performance will also vary quite a bit depending on the access pattern. Slicing 
 
 An overview of some chunking performance considerations are [available here](https://www.oreilly.com/library/view/python-and-hdf5/9781491944981/ch04.html).
 
-By default, *cellcutter* creates Zarra arrays with chunks of the size `[channels in TIFF, x cells, thumbnail width, thumbnail height]`, meaning for a given cell, all channels and the entire thumbnail image are stored in the same chunk. The number of cells `x` per chunk is calculated internally so that each chunk has a total uncompressed size of about 32 MB.
+By default, *cellcutter* creates Zarr arrays with chunks of the size `[channels in TIFF, x cells, thumbnail width, thumbnail height]`, meaning for a given cell, all channels and the entire thumbnail image are stored in the same chunk. The number of cells `x` per chunk is calculated internally such that each chunk has a total uncompressed size of about 32 MB.
 
 The default chunk size works well for access patterns that request all channels and the entire thumbnail for a given range of cells. Ideally, the cells should be contiguous along the second dimension of the array.
 
+
 ```python
-import itertools
 import zarr
-import pandas as pd
-import numpy as np
-from matplotlib import pyplot as plt
-from numcodecs import Blosc
+from numpy.random import default_rng
 ```
 
 
@@ -138,6 +135,7 @@ z.shape
 
 
 
+
 ```python
 z.chunks
 ```
@@ -145,11 +143,15 @@ z.chunks
 
 
 
-    (12, 330, 46, 46)
+    (12, 660, 46, 46)
 
 
 
-The `chunks` property gives the size of each chunk in the array. In this example, all 12 channels, 330 cells, and the complete thumbnail are stored in a single chunk.
+The `chunks` property gives the size of each chunk in the array. In this example, all 12 channels, 660 cells, and the complete thumbnail are stored in a single chunk.
+
+The number of cells per chunk is determined automatically by default and can be set directly using the `--cells-per-chunk` argument to *cellcutter* or alternatively indirectly using `--chunk-size`.
+
+Also here the number of cells per chunk should ideally be more or less in line with how many cells are requested in a typical array access operation.
 
 ### Access patterns
 
@@ -157,7 +159,7 @@ The `chunks` property gives the size of each chunk in the array. In this example
 
 
 ```python
-from numpy.random import default_rng
+
 rng = default_rng()
 def rand_slice(n=100):
     return rng.choice(z.shape[1], size=n, replace=False)
@@ -169,7 +171,7 @@ def rand_slice(n=100):
 _ = z.get_orthogonal_selection((slice(None), rand_slice()))
 ```
 
-    109 ms ± 2.9 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+    101 ms ± 2.01 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
 
 
 #### 100 Contiguous cells
@@ -180,16 +182,71 @@ _ = z.get_orthogonal_selection((slice(None), rand_slice()))
 _ = z[:, 1000:1100, ...]
 ```
 
-    4.13 ms ± 139 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
+    5.81 ms ± 45.3 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
 
 
-Accessing **100 random cells** from the Zarr array takes around 110 ms whereas accessing **100 contiguous cells** (cell 1000 to 1100) only takes around 4 ms — an almost 30-fold speed difference. This is because random cells are likely to be distributed across many separate chunks. All these chunks need to be read into memory in full even if only a single cell is requested for a given chunk. In contrast, contiguous cells are stored together in one or several neighboring chunks minimizing the amount of data that has to be read from disk.
+Accessing **100 random cells** from the Zarr array takes around 100 ms whereas accessing **100 contiguous cells** (cell 1000 to 1100) only takes around 6 ms — an almost 17-fold speed difference. This is because random cells are likely to be distributed across many separate chunks. All these chunks need to be read into memory in full even if only a single cell is requested for a given chunk. Given that this particular array happens to be split up into 15 chunks total the speed difference suggests that every request of 100 random cells results in all chunks being read from disk
+
+In contrast, contiguous cells are stored together in one or several neighboring chunks minimizing the amount of data that has to be read from disk.
 
 ### Fast access to random cells
 
-If access to random cells is required, for example for training a machine learning model, there is a workaround avoiding the performance penalty of requesting random cells. Instead of truly accessing random cells we can instead randomize cell order before the Zarr array is created. Because cell order is random we can then simply request contiguous cells during training.
-
+If access to random cells is required, for example for training a machine learning model, there is a workaround avoiding the performance penalty of requesting random cells. Instead of requesting a random slices of the array we can instead randomize cell order before the Zarr array is created. Because cell order is random we can then simply access a contiguous slice of cells during training.
 The simplest way to randomize cell order is to shuffle the order of rows in the CSV file that is passed to *cellcutter*, for example by using *pandas* `df.sample(frac=1)`.
+
+A training loop using cell thumbnails created with this method could look something like this:
+
+
+```python
+import pandas as pd
+from timeit import default_timer
+```
+
+
+```python
+csv = pd.read_csv("exemplar-001/quantification/unmicst-exemplar-001_cellMask.csv")
+P = 0.2
+
+# batch sizes
+batch_size_train = 500
+batch_size_valid = round(batch_size_train * P)
+
+# training loop
+for i, s in enumerate(
+    range(0, len(csv) - batch_size_train - batch_size_valid, batch_size_train + batch_size_valid)
+):
+    # construct training and validation slices
+    train_slice = (s, s + batch_size_train)
+    valid_slice = (train_slice[1], train_slice[1] + batch_size_valid)
+    # get training and validation thumbnails
+    start_time = default_timer()
+    x_train = z[:, train_slice[0]:train_slice[1], ...]
+    x_valid = z[:, valid_slice[0]:valid_slice[1], ...]
+    end_time = default_timer()
+    print(
+        f"Iteration {i} training using cells {train_slice}",
+        f"validating using cells {valid_slice}",
+        f"loading images took {round(end_time - start_time, 3)}s"
+    )
+    # Do training
+```
+
+    Iteration 0 training using cells (0, 500) validating using cells (500, 600) loading images took 0.018s
+    Iteration 1 training using cells (600, 1100) validating using cells (1100, 1200) loading images took 0.03s
+    Iteration 2 training using cells (1200, 1700) validating using cells (1700, 1800) loading images took 0.024s
+    Iteration 3 training using cells (1800, 2300) validating using cells (2300, 2400) loading images took 0.023s
+    Iteration 4 training using cells (2400, 2900) validating using cells (2900, 3000) loading images took 0.023s
+    Iteration 5 training using cells (3000, 3500) validating using cells (3500, 3600) loading images took 0.023s
+    Iteration 6 training using cells (3600, 4100) validating using cells (4100, 4200) loading images took 0.023s
+    Iteration 7 training using cells (4200, 4700) validating using cells (4700, 4800) loading images took 0.023s
+    Iteration 8 training using cells (4800, 5300) validating using cells (5300, 5400) loading images took 0.023s
+    Iteration 9 training using cells (5400, 5900) validating using cells (5900, 6000) loading images took 0.027s
+    Iteration 10 training using cells (6000, 6500) validating using cells (6500, 6600) loading images took 0.02s
+    Iteration 11 training using cells (6600, 7100) validating using cells (7100, 7200) loading images took 0.019s
+    Iteration 12 training using cells (7200, 7700) validating using cells (7700, 7800) loading images took 0.023s
+    Iteration 13 training using cells (7800, 8300) validating using cells (8300, 8400) loading images took 0.023s
+    Iteration 14 training using cells (8400, 8900) validating using cells (8900, 9000) loading images took 0.025s
+
 
 
 ## Funding
