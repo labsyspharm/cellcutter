@@ -8,55 +8,15 @@ import pandas as pd
 from . import cut as cut_mod
 
 
-class BooleanOptionalAction(argparse.Action):
-    def __init__(
-        self,
-        option_strings,
-        dest,
-        default=None,
-        type=None,
-        choices=None,
-        required=False,
-        help=None,
-        metavar=None,
-        prefix="--dont-",
-    ):
-        self.prefix = prefix
-        _option_strings = []
-        for option_string in option_strings:
-            _option_strings.append(option_string)
-
-            if option_string.startswith("--"):
-                option_string = prefix + option_string[2:]
-                _option_strings.append(option_string)
-        if help is not None and default is not None:
-            help += f" (default: {default})"
-        super().__init__(
-            option_strings=_option_strings,
-            dest=dest,
-            nargs=0,
-            default=default,
-            type=type,
-            choices=choices,
-            required=required,
-            help=help,
-            metavar=metavar,
-        )
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        if option_string in self.option_strings:
-            setattr(namespace, self.dest, not option_string.startswith(self.prefix))
-
-    def format_usage(self):
-        return " | ".join(self.option_strings)
-
-
 def cut():
     parser = argparse.ArgumentParser(
         description="""Cut out thumbnail images of all cells.
 
         Thumbnails will be stored as Zarr array (https://zarr.readthedocs.io/en/stable/index.html)
         with dimensions [#channels, #cells, window_size, window_size].
+
+        The chunking shape greatly influences performance
+        https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
         """,
     )
     parser.add_argument(
@@ -72,7 +32,8 @@ def cut():
     parser.add_argument(
         "CELL_DATA",
         help="Path to CSV file with a row for each cell. Must contain columns CellID "
-        "(must correspond to the cell IDs in the segmentation mask), Y_centroid, and X_centroid.",
+        "(must correspond to the cell IDs in the segmentation mask), Y_centroid, and X_centroid "
+        "(the coordinates of cell centroids).",
     )
     parser.add_argument(
         "DESTINATION",
@@ -84,7 +45,7 @@ def cut():
     parser.add_argument(
         "-z",
         default=False,
-        action=BooleanOptionalAction,
+        action="store_true",
         help="Store thumbnails in a single zip file instead of a directory.",
     )
     parser.add_argument(
@@ -95,16 +56,35 @@ def cut():
     )
     parser.add_argument(
         "--mask-cells",
-        default=True,
-        action=BooleanOptionalAction,
-        help="Fill every pixel not occupied by the target cell with zeros. (Default: --mask-cells)",
+        default=False,
+        action="store_true",
+        help="Fill every pixel not occupied by the target cell with zeros.",
     )
-    parser.add_argument(
+    chunk_size_group = parser.add_mutually_exclusive_group()
+    chunk_size_group.add_argument(
         "--chunk-size",
         default=32,
         type=int,
-        help="Desired uncompressed chunk size in MB."
-        "See https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations. (Default: 32)",
+        help="Desired uncompressed chunk size in MB. "
+        "(See https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations) "
+        "Since the other chunk dimensions are fixed as [#channels, #cells, window_size, window_size], "
+        "this argument determines the number of cells per chunk. (Default: 32 MB)",
+    )
+    chunk_size_group.add_argument(
+        "--cells-per-chunk",
+        default=None,
+        type=int,
+        help="Desired number of cells stored per Zarr array chunk. By default this is "
+        "determined automatically using the chunk size parameter. Setting this option "
+        "overrides the chunk size parameter.",
+    )
+    parser.add_argument(
+        "--cache-size",
+        default=10 * 1024,
+        type=int,
+        help="Cache size for reading image tiles in MB. For best performance the cache "
+        "size should be larger than the size of the image. "
+        "(Default: 10240 MB = 10 GB)",
     )
     parser.add_argument(
         "--channels",
@@ -112,12 +92,12 @@ def cut():
         nargs="*",
         default=None,
         help="Indices of channels (1-based) to include in the output e.g., --channels 1 3 5. "
-        "Default is to include all channels. This option has to *after* the positional arguments.",
+        "Default is to include all channels. This option must be *after* all positional arguments.",
     )
     args = parser.parse_intermixed_args()
     logging.basicConfig(
         format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
-        level=os.environ.get("LOGLEVEL", "WARNING").upper(),
+        level=os.environ.get("LOGLEVEL", "INFO").upper(),
     )
     logging.info(args)
     img = cut_mod.Image(args.IMAGE)
@@ -141,7 +121,9 @@ def cut():
         mask_cells=args.mask_cells,
         processes=args.p,
         target_chunk_size=args.chunk_size * 1024 * 1024,
+        cells_per_chunk=args.cells_per_chunk,
         channels=channels,
         use_zip=args.z,
+        cache_size=args.cache_size * 1024 * 1024,
     )
     logging.info("Done")
