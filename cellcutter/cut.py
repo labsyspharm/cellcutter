@@ -108,6 +108,7 @@ def process_all_channels(
     mask_cells: bool = True,
     processes: int = 1,
     target_chunk_size: int = 32 * 1024 * 1024,
+    cells_per_chunk: Optional[int] = None,
     channels: Optional[Iterable[int]] = None,
     use_zip: bool = False,
     cache_size: int = 1024 * 1024 * 1024,
@@ -141,9 +142,12 @@ def process_all_channels(
     if channels[0] < 0 or channels[-1] >= img.n_channels:
         raise ValueError(f"Channel indices must be between 0 and {img.n_channels - 1}.")
     array_shape = (len(channels), cell_data.shape[0], window_size, window_size)
-    array_chunks = find_chunk_size(
-        array_shape, np.dtype(img.dtype).itemsize, target_bytes=target_chunk_size
-    )
+    if cells_per_chunk is None:
+        array_chunks = find_chunk_size(
+            array_shape, np.dtype(img.dtype).itemsize, target_bytes=target_chunk_size
+        )
+    else:
+        array_chunks = tuple(int(x) for x in (len(channels), cells_per_chunk, window_size, window_size))
     logging.info(f"Using chunks of shape {array_chunks}")
     # If writing to a zip file, create a temporary directory to store the zarr files
     # and compress them into the zip file at the end. Solves issues with concurrent

@@ -60,7 +60,8 @@ def cut():
         action="store_true",
         help="Fill every pixel not occupied by the target cell with zeros.",
     )
-    parser.add_argument(
+    chunk_size_group = parser.add_mutually_exclusive_group()
+    chunk_size_group.add_argument(
         "--chunk-size",
         default=32,
         type=int,
@@ -68,6 +69,14 @@ def cut():
         "(See https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations) "
         "Since the other chunk dimensions are fixed as [#channels, #cells, window_size, window_size], "
         "this argument determines the number of cells per chunk. (Default: 32 MB)",
+    )
+    chunk_size_group.add_argument(
+        "--cells-per-chunk",
+        default=None,
+        type=int,
+        help="Desired number of cells stored per Zarr array chunk. By default this is "
+        "determined automatically using the chunk size parameter. Setting this option "
+        "overrides the chunk size parameter.",
     )
     parser.add_argument(
         "--cache-size",
@@ -112,6 +121,7 @@ def cut():
         mask_cells=args.mask_cells,
         processes=args.p,
         target_chunk_size=args.chunk_size * 1024 * 1024,
+        cells_per_chunk=args.cells_per_chunk,
         channels=channels,
         use_zip=args.z,
         cache_size=args.cache_size * 1024 * 1024,

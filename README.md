@@ -14,8 +14,8 @@ pip install git+https://github.com/labsyspharm/cellcutter.git#egg=cellcutter
 
 ```
 cut_cells [-h] [-p P] [-z] [--window-size WINDOW_SIZE] [--mask-cells]
-                 [--chunk-size CHUNK_SIZE] [--cache-size CACHE_SIZE]
-                 [--channels [CHANNELS ...]]
+                 [--chunk-size CHUNK_SIZE | --cells-per-chunk CELLS_PER_CHUNK]
+                 [--cache-size CACHE_SIZE] [--channels [CHANNELS ...]]
                  IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION
 
 Cut out thumbnail images of all cells. Thumbnails will be stored as Zarr array
@@ -24,39 +24,41 @@ window_size, window_size]. The chunking shape greatly influences performance
 https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
 
 positional arguments:
-  IMAGE                 Path to image in TIFF format, potentially with multiple
-                        channels. Thumbnails will be created from each channel.
-  SEGMENTATION_MASK     Path to segmentation mask image in TIFF format. Used to
-                        automatically chose window size and find cell outlines.
-  CELL_DATA             Path to CSV file with a row for each cell. Must contain columns
-                        CellID (must correspond to the cell IDs in the segmentation
-                        mask), Y_centroid, and X_centroid (the coordinates of cell
-                        centroids).
-  DESTINATION           Path to a new directory where cell thumbnails will be stored in
-                        Zarr format.
+  IMAGE                 Path to image in TIFF format, potentially with multiple channels.
+                        Thumbnails will be created from each channel.
+  SEGMENTATION_MASK     Path to segmentation mask image in TIFF format. Used to automatically
+                        chose window size and find cell outlines.
+  CELL_DATA             Path to CSV file with a row for each cell. Must contain columns CellID
+                        (must correspond to the cell IDs in the segmentation mask), Y_centroid,
+                        and X_centroid (the coordinates of cell centroids).
+  DESTINATION           Path to a new directory where cell thumbnails will be stored in Zarr
+                        format.
 
 options:
   -h, --help            show this help message and exit
   -p P                  Number of processes run in parallel.
   -z                    Store thumbnails in a single zip file instead of a directory.
   --window-size WINDOW_SIZE
-                        Size of the cell thumbnail in pixels. Defaults to size of
-                        largest cell.
+                        Size of the cell thumbnail in pixels. Defaults to size of largest cell.
   --mask-cells          Fill every pixel not occupied by the target cell with zeros.
   --chunk-size CHUNK_SIZE
                         Desired uncompressed chunk size in MB. (See
-                        https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-
-                        optimizations) Since the other chunk dimensions are fixed as
-                        [#channels, #cells, window_size, window_size], this argument
-                        determines the number of cells per chunk. (Default: 32 MB)
+                        https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations)
+                        Since the other chunk dimensions are fixed as [#channels, #cells,
+                        window_size, window_size], this argument determines the number of cells
+                        per chunk. (Default: 32 MB)
+  --cells-per-chunk CELLS_PER_CHUNK
+                        Desired number of cells stored per Zarr array chunk. By default this is
+                        determined automatically using the chunk size parameter. Setting this
+                        option overrides the chunk size parameter.
   --cache-size CACHE_SIZE
-                        Cache size for reading image tiles in MB. For best performance
-                        the cache size should be larger than the size of the image.
-                        (Default: 10240 MB = 10 GB)
+                        Cache size for reading image tiles in MB. For best performance the
+                        cache size should be larger than the size of the image. (Default: 10240 MB
+                        = 10 GB)
   --channels [CHANNELS ...]
-                        Indices of channels (1-based) to include in the output e.g.,
-                        --channels 1 3 5. Default is to include all channels. This
-                        option must be *after* all positional arguments.
+                        Indices of channels (1-based) to include in the output e.g., --channels 1
+                        3 5. Default is to include all channels. This option must be *after* all
+                        positional arguments.
 ```
 
 ## Example
