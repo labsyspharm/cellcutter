@@ -8,49 +8,6 @@ import pandas as pd
 from . import cut as cut_mod
 
 
-class BooleanOptionalAction(argparse.Action):
-    def __init__(
-        self,
-        option_strings,
-        dest,
-        default=None,
-        type=None,
-        choices=None,
-        required=False,
-        help=None,
-        metavar=None,
-        prefix="--dont-",
-    ):
-        self.prefix = prefix
-        _option_strings = []
-        for option_string in option_strings:
-            _option_strings.append(option_string)
-
-            if option_string.startswith("--"):
-                option_string = prefix + option_string[2:]
-                _option_strings.append(option_string)
-        if help is not None and default is not None:
-            help += f" (Default: {default})"
-        super().__init__(
-            option_strings=_option_strings,
-            dest=dest,
-            nargs=0,
-            default=default,
-            type=type,
-            choices=choices,
-            required=required,
-            help=help,
-            metavar=metavar,
-        )
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        if option_string in self.option_strings:
-            setattr(namespace, self.dest, not option_string.startswith(self.prefix))
-
-    def format_usage(self):
-        return " | ".join(self.option_strings)
-
-
 def cut():
     parser = argparse.ArgumentParser(
         description="""Cut out thumbnail images of all cells.
@@ -58,7 +15,8 @@ def cut():
         Thumbnails will be stored as Zarr array (https://zarr.readthedocs.io/en/stable/index.html)
         with dimensions [#channels, #cells, window_size, window_size].
 
-        The chunking shape greatly influences performance  ttps://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
+        The chunking shape greatly influences performance
+        https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
         """,
     )
     parser.add_argument(
@@ -74,7 +32,8 @@ def cut():
     parser.add_argument(
         "CELL_DATA",
         help="Path to CSV file with a row for each cell. Must contain columns CellID "
-        "(must correspond to the cell IDs in the segmentation mask), Y_centroid, and X_centroid.",
+        "(must correspond to the cell IDs in the segmentation mask), Y_centroid, and X_centroid "
+        "(the coordinates of cell centroids).",
     )
     parser.add_argument(
         "DESTINATION",
@@ -86,7 +45,7 @@ def cut():
     parser.add_argument(
         "-z",
         default=False,
-        action=BooleanOptionalAction,
+        action="store_true",
         help="Store thumbnails in a single zip file instead of a directory.",
     )
     parser.add_argument(
@@ -97,8 +56,8 @@ def cut():
     )
     parser.add_argument(
         "--mask-cells",
-        default=True,
-        action=BooleanOptionalAction,
+        default=False,
+        action="store_true",
         help="Fill every pixel not occupied by the target cell with zeros.",
     )
     parser.add_argument(
@@ -114,7 +73,9 @@ def cut():
         "--cache-size",
         default=10 * 1024,
         type=int,
-        help="Cache size for reading image tiles in MB. (Default: 10 * 1024 MB)",
+        help="Cache size for reading image tiles in MB. For best performance the cache "
+        "size should be larger than the size of the image. "
+        "(Default: 10240 MB = 10 GB)",
     )
     parser.add_argument(
         "--channels",

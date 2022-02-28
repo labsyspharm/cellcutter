@@ -175,13 +175,17 @@ def process_all_channels(
             compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
         )
+        mask_thumbnails_temp = np.empty(
+            (cell_data.shape[0], window_size, window_size), dtype=np.bool_,
+        )
         cut_cells(
             segmentation_mask_img,
             cell_data,
             window_size,
-            mask_thumbnails,
+            mask_thumbnails_temp,
             create_mask_thumbnails=True,
         )
+        mask_thumbnails[...] = mask_thumbnails_temp[...]
         # If writing to zip files was requested zipping up the directory now
         if use_zip:
             logging.debug(f"Zipping up mask to {destination_mask}")
