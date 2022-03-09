@@ -7,6 +7,7 @@ import numpy as np
 import tifffile
 import zarr
 
+
 def pairwise(iterable):
     "s -> (s0,s1), (s1,s2), (s2, s3), ..."
     a, b = itertools.tee(iterable)
@@ -30,7 +31,9 @@ def zip_dir(dir: Union[pathlib.Path, str], zip_file: Union[pathlib.Path, str]) -
             zf.write(f, f.relative_to(dir))
 
 
-def padded_subset(img: Union[zarr.Array, np.ndarray], x: int, y: int, window_size: Tuple[int, int]) -> np.ndarray:
+def padded_subset(
+    img: Union[zarr.Array, np.ndarray], x: int, y: int, window_size: Tuple[int, int]
+) -> np.ndarray:
     "Return a subset of the image with the given window size padded with zero if window is partially outside the image"
     wh = img.shape[-2:]
     s = (
@@ -42,18 +45,10 @@ def padded_subset(img: Union[zarr.Array, np.ndarray], x: int, y: int, window_siz
         (max(0, s[1][0]), min(wh[1], s[1][1])),
     )
     s_out = (
-        (
-            max(0, -s[0][0]),
-            min(window_size[0], window_size[0] - s[0][1] + wh[0]),
-        ),
-        (
-            max(0, -s[1][0]),
-            min(window_size[1], window_size[1] - s[1][1] + wh[1]),
-        ),
+        (max(0, -s[0][0]), min(window_size[0], window_size[0] - s[0][1] + wh[0]),),
+        (max(0, -s[1][0]), min(window_size[1], window_size[1] - s[1][1] + wh[1]),),
     )
-    out = np.zeros(
-        img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype
-    )
+    out = np.zeros(img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype)
     out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img[
         ..., s_img[0][0] : s_img[0][1], s_img[1][0] : s_img[1][1]
     ]
@@ -64,11 +59,18 @@ class Image:
     def __init__(self, path: str, cache_size: int = 1024 * 1024 * 1024):
         self.path = path
         self.image = tifffile.TiffFile(path)
+        # Check if we have a TIFF files created using the new pyramid scheme
+        # Update images using https://github.com/labsyspharm/ome-tiff-pyramid-tools/blob/master/pyramid_upgrade.py
+        if "Faas" in self.image.pages[0].software:
+            raise ValueError(
+                "Image is created using an old pyramid encoding scheme. "
+                "Please update using https://github.com/labsyspharm/ome-tiff-pyramid-tools/blob/master/pyramid_upgrade.py"
+            )
         self.base_series = self.image.series[0]
         self.cache_size = cache_size
         self.zarr = zarr.open(
             zarr.LRUStoreCache(self.image.aszarr(series=0), self.cache_size), mode="r"
-        )
+        )[0]
 
     def get_channel(self, channel_index: int) -> np.ndarray:
         return self.base_series.pages[channel_index].asarray()

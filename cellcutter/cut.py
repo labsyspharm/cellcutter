@@ -203,7 +203,8 @@ def process_all_channels(
     ) as executor, SharedMemoryManager() as smm:
         if n_bytes_img < cache_size:
             logging.info(
-                f"Image size {n_bytes_img} is smaller than cache size {cache_size}. "
+                f"Image size ({round(n_bytes_img / 1024**2)} MB) is smaller "
+                f"than cache size ({round(cache_size / 1024**2)} MB). "
                 "Loading entire image into memory."
             )
             raw_sm = smm.SharedMemory(size=n_bytes_img)
@@ -225,8 +226,9 @@ def process_all_channels(
                 for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
             }
         else:
-            logging.info(
-                f"Image size {n_bytes_img} is larger than cache size {cache_size}. "
+            logging.warn(
+                f"Image size ({round(n_bytes_img / 1024**2)} MB) is larger than "
+                f"cache size ({round(cache_size / 1024**2)} MB). "
                 "This results in many reads from disk and will be slow. Consider "
                 "increasing the cache size."
             )
