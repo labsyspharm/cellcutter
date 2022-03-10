@@ -1,5 +1,6 @@
 import logging
 import concurrent.futures
+from operator import inv
 import pathlib
 from typing import Optional, Union, Iterable, Tuple
 from multiprocessing.shared_memory import SharedMemory
@@ -150,20 +151,19 @@ def process_all_channels(
     segmentation_mask_img = segmentation_mask.get_channel(0)
     # Check if all cell IDs present in the CSV file are also represented in the segmentation mask
     logging.info("Check consistency of cell IDs")
-    cell_ids_in_segmentation_mask = np.unique(segmentation_mask_img)
-    n_not_in_segmentation_mask = set(cell_data["CellID"]) - set(
-        cell_ids_in_segmentation_mask
-    )
-    if len(n_not_in_segmentation_mask) > 0:
+    cell_ids_not_in_segmentation_mask = np.in1d(cell_data["CellID"], segmentation_mask_img, invert=True)
+    n_not_in_segmentation_mask = np.sum(cell_ids_not_in_segmentation_mask)
+    del cell_ids_not_in_segmentation_mask
+    if n_not_in_segmentation_mask > 0:
         raise ValueError(
-            f"{len(n_not_in_segmentation_mask)} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask."
+            f"{n_not_in_segmentation_mask} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask."
         )
-    # Remove cells from segmentation mask that are not present in the CSV
-    segmentation_mask_img[~np.isin(segmentation_mask_img, cell_data["CellID"])] = 0
+    logging.info("Remove cells from segmentation mask that are not present in the CSV")
+    segmentation_mask_img[np.isin(segmentation_mask_img, cell_data["CellID"], invert=True)] = 0
     if window_size is None:
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask_img)
-        logging.info(f"Use window size {window_size}")
+    logging.info(f"Use window size {window_size}")
     if channels is None:
         channels = np.arange(img.n_channels)
     else:
