@@ -21,6 +21,7 @@ def cut_cells(
     cell_stack: Union[zarr.Array, np.ndarray],
     mask_thumbnails: Optional[Union[zarr.Array, np.ndarray]] = None,
     create_mask_thumbnails: bool = False,
+    channels: Optional[Iterable[int]] = None,
 ) -> None:
     "Cut cells from a given image and write them into the given Zarr or Numpy array."
     for i, c in enumerate(cell_data.itertuples()):
@@ -30,6 +31,8 @@ def cut_cells(
         )
         if create_mask_thumbnails:
             thumbnail = thumbnail == c.CellID
+        if channels is not None:
+            thumbnail = thumbnail[channels, ...]
         cell_stack[..., i, :, :] = thumbnail
         if mask_thumbnails is not None:
             cell_stack[..., i, :, :] *= mask_thumbnails[i]
@@ -43,16 +46,27 @@ def cut_cell_range(
     cut_array: zarr.Array,
     mask_thumbnails: Optional[zarr.Array] = None,
     cache_size: int = 1024 * 1024 * 1024,
+    channels: Optional[Iterable[int]] = None,
 ) -> None:
     "Cut the given range of cells from a TIFF image and write them into the given Zarr or Numpy array."
     image = Image(image, cache_size=cache_size)
     cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
     cell_stack_temp = np.empty(
-        (image.n_channels, cell_range[1] - cell_range[0], window_size, window_size),
+        (
+            image.n_channels if channels is None else len(channels),
+            cell_range[1] - cell_range[0],
+            window_size,
+            window_size,
+        ),
         dtype=image.dtype,
     )
     cut_cells(
-        image.zarr, cell_data_subset, window_size, cell_stack_temp, mask_thumbnails
+        image.zarr,
+        cell_data_subset,
+        window_size,
+        cell_stack_temp,
+        mask_thumbnails,
+        channels=channels,
     )
     cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
 
@@ -65,18 +79,33 @@ def cut_cell_range_shared_mem(
     window_size: int,
     cut_array: zarr.Array,
     mask_thumbnails: Optional[zarr.Array] = None,
+    channels: Optional[Iterable[int]] = None,
 ) -> None:
     "Cut the given range of cells from a TIFF image in shared memory and write them into the given Zarr or Numpy array."
     img = Image(image)
     sm = SharedMemory(name=address)
-    img_array = np.ndarray(img.base_series.shape, dtype=img.dtype, buffer=sm.buf)
+    img_shape = list(img.base_series.shape)
+    if channels is not None:
+        img_shape[0] = len(channels)
+    img_array = np.ndarray(img_shape, dtype=img.dtype, buffer=sm.buf)
     cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
     cell_stack_temp = np.empty(
-        (img.n_channels, cell_range[1] - cell_range[0], window_size, window_size),
+        (
+            img.n_channels if channels is None else len(channels),
+            cell_range[1] - cell_range[0],
+            window_size,
+            window_size,
+        ),
         dtype=img.dtype,
     )
     cut_cells(
-        img_array, cell_data_subset, window_size, cell_stack_temp, mask_thumbnails
+        img_array,
+        cell_data_subset,
+        window_size,
+        cell_stack_temp,
+        mask_thumbnails,
+        # Input image already only includes the channels we want
+        channels=None,
     )
     cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
 
@@ -147,7 +176,9 @@ def process_all_channels(
             array_shape, np.dtype(img.dtype).itemsize, target_bytes=target_chunk_size
         )
     else:
-        array_chunks = tuple(int(x) for x in (len(channels), cells_per_chunk, window_size, window_size))
+        array_chunks = tuple(
+            int(x) for x in (len(channels), cells_per_chunk, window_size, window_size)
+        )
     logging.info(f"Using chunks of shape {array_chunks}")
     # If writing to a zip file, create a temporary directory to store the zarr files
     # and compress them into the zip file at the end. Solves issues with concurrent
@@ -197,7 +228,9 @@ def process_all_channels(
                 mask_store.path, destination_mask,
             )
     n_cells = array_shape[1]
-    n_bytes_img = img.dtype.itemsize * np.prod(img.base_series.shape)
+    # Only load required channels
+    img_shape = (len(channels),) + img.base_series.shape[1:]
+    n_bytes_img = img.dtype.itemsize * np.prod(img_shape)
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=processes
     ) as executor, SharedMemoryManager() as smm:
@@ -208,10 +241,8 @@ def process_all_channels(
                 "Loading entire image into memory."
             )
             raw_sm = smm.SharedMemory(size=n_bytes_img)
-            img_array = np.ndarray(
-                img.base_series.shape, dtype=img.dtype, buffer=raw_sm.buf
-            )
-            img_array[...] = img.zarr[...]
+            img_array = np.ndarray(img_shape, dtype=img.dtype, buffer=raw_sm.buf)
+            img_array[...] = img.zarr.oindex[channels, :, :]
             futures = {
                 executor.submit(
                     cut_cell_range_shared_mem,
@@ -222,6 +253,7 @@ def process_all_channels(
                     window_size=window_size,
                     cut_array=file,
                     mask_thumbnails=mask_thumbnails,
+                    channels=channels,
                 ): cell_range
                 for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
             }
@@ -242,6 +274,7 @@ def process_all_channels(
                     cut_array=file,
                     mask_thumbnails=mask_thumbnails,
                     cache_size=cache_size // processes,
+                    channels=channels,
                 ): cell_range
                 for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
             }
