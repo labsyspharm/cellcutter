@@ -1,11 +1,18 @@
 import argparse
 import logging
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
 
 from . import cut as cut_mod
+
+
+def formatwarning_duplicate_channel(*args, **kwargs):
+    if isinstance(args[0], cut_mod.DuplicateChannelWarning):
+        args[0].duplicate_channels += 1
+    return str(args[0])
 
 
 def cut():
@@ -33,7 +40,10 @@ def cut():
         "CELL_DATA",
         help="Path to CSV file with a row for each cell. Must contain columns CellID "
         "(must correspond to the cell IDs in the segmentation mask), Y_centroid, and X_centroid "
-        "(the coordinates of cell centroids).",
+        "(the coordinates of cell centroids). "
+        "Only cells represented in the given CSV file will be used, even if "
+        "additional cells are present in the segmentation mask. Cells are written to "
+        "the file in the same order as they appear in the CSV file.",
     )
     parser.add_argument(
         "DESTINATION",
@@ -92,13 +102,15 @@ def cut():
         nargs="*",
         default=None,
         help="Indices of channels (1-based) to include in the output e.g., --channels 1 3 5. "
-        "Default is to include all channels. This option must be *after* all positional arguments.",
+        "Channels are included in the file in the given order. If not specified, by default all channels are included. "
+        "This option must be *after* all positional arguments.",
     )
     args = parser.parse_intermixed_args()
     logging.basicConfig(
         format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
         level=os.environ.get("LOGLEVEL", "INFO").upper(),
     )
+    logging.captureWarnings(True)
     logging.info(args)
     img = cut_mod.Image(args.IMAGE)
     segmentation_mask_img = cut_mod.Image(args.SEGMENTATION_MASK)
@@ -109,21 +121,25 @@ def cut():
     logging.info(f"Found {len(cell_data_df)} cells")
     channels = None
     if args.channels:
-        channels = np.unique(np.array(args.channels)) - 1
-        if channels[0] < 0 or channels[-1] >= img.n_channels:
+        # CLI uses 1-based indices, but we use 0-based indices internally
+        channels = np.array(args.channels) - 1
+        if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
             raise ValueError(f"Channel indices must be between 1 and {img.n_channels}.")
-    cut_mod.process_all_channels(
-        img,
-        segmentation_mask_img,
-        cell_data_df,
-        args.DESTINATION,
-        window_size=args.window_size,
-        mask_cells=args.mask_cells,
-        processes=args.p,
-        target_chunk_size=args.chunk_size * 1024 * 1024,
-        cells_per_chunk=args.cells_per_chunk,
-        channels=channels,
-        use_zip=args.z,
-        cache_size=args.cache_size * 1024 * 1024,
-    )
+    with warnings.catch_warnings():
+        # Make sure warning about duplicate channels are printed using 1-based indices
+        warnings.formatwarning = formatwarning_duplicate_channel
+        cut_mod.process_image(
+            img,
+            segmentation_mask_img,
+            cell_data_df,
+            args.DESTINATION,
+            window_size=args.window_size,
+            mask_cells=args.mask_cells,
+            processes=args.p,
+            target_chunk_size=args.chunk_size * 1024 * 1024,
+            cells_per_chunk=args.cells_per_chunk,
+            channels=channels,
+            use_zip=args.z,
+            cache_size=args.cache_size * 1024 * 1024,
+        )
     logging.info("Done")
