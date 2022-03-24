@@ -1,6 +1,7 @@
 import logging
 import concurrent.futures
 import pathlib
+import warnings
 from typing import Optional, Union, Iterable, Tuple
 from multiprocessing.shared_memory import SharedMemory
 from multiprocessing.managers import SharedMemoryManager
@@ -12,6 +13,19 @@ from numcodecs import Blosc
 from skimage.measure import regionprops_table
 
 from .utils import padded_subset, range_all, pairwise, zip_dir, Image
+
+
+class DuplicateChannelWarning(Warning):
+    def __init__(self, *args, **kwargs):
+        channels = kwargs.pop("duplicate_channels")
+        super().__init__(*args, **kwargs)
+        self.duplicate_channels = channels
+
+    def __str__(self):
+        return (
+            "The given channels are not unique. "
+            f"Channels {' '.join(str(x) for x in self.duplicate_channels)} will appear more than once in the output file."
+        )
 
 
 def cut_cells(
@@ -128,12 +142,12 @@ def find_chunk_size(
     return tuple(int(x) for x in (shape[0], cells_per_chunk, shape[2], shape[3]))
 
 
-def process_all_channels(
-    img: Image,
-    segmentation_mask: Image,
+def process_image(
+    img: Union[str, Image],
+    segmentation_mask: Union[str, Image],
     cell_data: pd.DataFrame,
     destination: Union[pathlib.Path, str],
-    window_size: Optional[int],
+    window_size: Optional[int] = None,
     mask_cells: bool = True,
     processes: int = 1,
     target_chunk_size: int = 32 * 1024 * 1024,
@@ -143,32 +157,45 @@ def process_all_channels(
     cache_size: int = 1024 * 1024 * 1024,
 ) -> None:
     "Given an image, segmentation mask, and cell positions, cut out cells and write a stack of cell thumbnails in Zarr format."
+    if not isinstance(img, Image):
+        img = Image(img)
+    if not isinstance(segmentation_mask, Image):
+        segmentation_mask = Image(segmentation_mask)
     destination = pathlib.Path(destination)
     if use_zip:
         destination = destination.with_suffix(".zip")
     logging.info("Loading segmentation mask")
     segmentation_mask_img = segmentation_mask.get_channel(0)
-    # Check if all cell IDs present in the CSV file are also represented in the segmentation mask
-    logging.info("Check consistency of cell IDs")
-    cell_ids_in_segmentation_mask = np.unique(segmentation_mask_img)
-    n_not_in_segmentation_mask = set(cell_data["CellID"]) - set(
-        cell_ids_in_segmentation_mask
+    logging.info(
+        "Check if all cell IDs from the CSV are represented in the segmentation mask"
     )
-    if len(n_not_in_segmentation_mask) > 0:
+    cell_ids_not_in_segmentation_mask = np.in1d(
+        cell_data["CellID"], segmentation_mask_img, invert=True
+    )
+    n_not_in_segmentation_mask = np.sum(cell_ids_not_in_segmentation_mask)
+    if n_not_in_segmentation_mask > 0:
         raise ValueError(
-            f"{len(n_not_in_segmentation_mask)} cell IDs in the CELL_DATA CSV file are not present in the segmentation mask."
+            f"{n_not_in_segmentation_mask} cell IDs in the CELL_DATA CSV file are not represented in the segmentation mask. "
+            "Please check that the segmentation mask contains all cell IDs present in the CSV file. "
+            f"The first 10 problematic IDs are {' '.join(str(x) for x in cell_data['CellID'][cell_ids_not_in_segmentation_mask][:10])}"
         )
-    # Remove cells from segmentation mask that are not present in the CSV
-    segmentation_mask_img[~np.isin(segmentation_mask_img, cell_data["CellID"])] = 0
+    del cell_ids_not_in_segmentation_mask
+    logging.info("Remove cells from segmentation mask that are not present in the CSV")
+    segmentation_mask_img[
+        np.isin(segmentation_mask_img, cell_data["CellID"], invert=True)
+    ] = 0
     if window_size is None:
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask_img)
-        logging.info(f"Use window size {window_size}")
+    logging.info(f"Use window size {window_size}")
     if channels is None:
         channels = np.arange(img.n_channels)
     else:
-        channels = np.unique(np.array(channels))
-    if channels[0] < 0 or channels[-1] >= img.n_channels:
+        if len(channels) != len(set(channels)):
+            vals, counts = np.unique(channels, return_counts=True)
+            warnings.warn(DuplicateChannelWarning(duplicate_channels=vals[counts > 1]))
+        channels = np.array(channels)
+    if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
         raise ValueError(f"Channel indices must be between 0 and {img.n_channels - 1}.")
     array_shape = (len(channels), cell_data.shape[0], window_size, window_size)
     if cells_per_chunk is None:
