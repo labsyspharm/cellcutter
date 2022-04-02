@@ -2,12 +2,13 @@
 
 # Create cell thumbnails
 
-Module for creating thumbnail images of all cells given a image and segmentation mask.
+Module for creating thumbnail images of cells given a multi-channel TIFF
+image and segmentation mask.
 
 ## Installation
 
 ```
-pip install git+https://github.com/labsyspharm/cellcutter.git#egg=cellcutter
+pip install cellcutter
 ```
 
 ## Usage
