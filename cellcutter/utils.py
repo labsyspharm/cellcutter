@@ -63,7 +63,7 @@ class Image:
         # Update images using https://github.com/labsyspharm/ome-tiff-pyramid-tools/blob/master/pyramid_upgrade.py
         if "Faas" in self.image.pages[0].software:
             raise ValueError(
-                "Image is created using an old pyramid encoding scheme. "
+                f"Image is created using an old pyramid encoding scheme: {path}\n"
                 "Please update using https://github.com/labsyspharm/ome-tiff-pyramid-tools/blob/master/pyramid_upgrade.py"
             )
         self.base_series = self.image.series[0]
