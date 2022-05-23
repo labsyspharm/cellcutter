@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import shutil
 import warnings
 
 import numpy as np
@@ -43,11 +44,13 @@ def cut():
         "(the coordinates of cell centroids). "
         "Only cells represented in the given CSV file will be used, even if "
         "additional cells are present in the segmentation mask. Cells are written to "
-        "the file in the same order as they appear in the CSV file.",
+        "the Zarr array in the same order as they appear in the CSV file.",
     )
     parser.add_argument(
-        "DESTINATION",
-        help="Path to a new directory where cell thumbnails will be stored in Zarr format.",
+        "DESTINATION", metavar="DESTINATION.zarr",
+        help="Path to a new directory where cell thumbnails will be stored in Zarr format. "
+        "Must end in '.zarr' and must not already exist. These restrictions can be lifted by "
+        "using the '-f/--force' flag.",
     )
     parser.add_argument(
         "-p", default=1, type=int, help="Number of processes run in parallel.",
@@ -57,6 +60,12 @@ def cut():
         default=False,
         action="store_true",
         help="Store thumbnails in a single zip file instead of a directory.",
+    )
+    parser.add_argument(
+        "-f", "--force",
+        default=False,
+        action="store_true",
+        help="Overwrite existing destination directory and don't enforce '.zarr' extension.",
     )
     parser.add_argument(
         "--window-size",
@@ -69,6 +78,23 @@ def cut():
         default=False,
         action="store_true",
         help="Fill every pixel not occupied by the target cell with zeros.",
+    )
+    parser.add_argument(
+        "--channels",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Indices of channels (1-based) to include in the output e.g., --channels 1 3 5. "
+        "Channels are included in the file in the given order. If not specified, by default all channels are included. "
+        "This option must be *after* all positional arguments.",
+    )
+    parser.add_argument(
+        "--cache-size",
+        default=10 * 1024,
+        type=int,
+        help="Cache size for reading image tiles in MB. For best performance the cache "
+        "size should be larger than the size of the image. "
+        "(Default: 10240 MB = 10 GB)",
     )
     chunk_size_group = parser.add_mutually_exclusive_group()
     chunk_size_group.add_argument(
@@ -88,23 +114,7 @@ def cut():
         "determined automatically using the chunk size parameter. Setting this option "
         "overrides the chunk size parameter.",
     )
-    parser.add_argument(
-        "--cache-size",
-        default=10 * 1024,
-        type=int,
-        help="Cache size for reading image tiles in MB. For best performance the cache "
-        "size should be larger than the size of the image. "
-        "(Default: 10240 MB = 10 GB)",
-    )
-    parser.add_argument(
-        "--channels",
-        type=int,
-        nargs="*",
-        default=None,
-        help="Indices of channels (1-based) to include in the output e.g., --channels 1 3 5. "
-        "Channels are included in the file in the given order. If not specified, by default all channels are included. "
-        "This option must be *after* all positional arguments.",
-    )
+
     args = parser.parse_intermixed_args()
     logging.basicConfig(
         format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
@@ -112,6 +122,21 @@ def cut():
     )
     logging.captureWarnings(True)
     logging.info(args)
+    if not args.DESTINATION.endswith(".zarr") and not args.force:
+        parser.error(
+            "Destination must end in '.zarr' unless '-f/--force' is used."
+        )
+    if os.path.exists(args.DESTINATION):
+        if not args.force:
+            parser.error(
+                "Destination directory already exists. Use '-f/--force' to overwrite."
+            )
+        else:
+            # Preemptively remove destination directory or file
+            if os.path.isfile(args.DESTINATION):
+                os.remove(args.DESTINATION)
+            else:
+                shutil.rmtree(args.DESTINATION)
     img = cut_mod.Image(args.IMAGE)
     segmentation_mask_img = cut_mod.Image(args.SEGMENTATION_MASK)
     logging.info("Loading cell data")
@@ -124,7 +149,7 @@ def cut():
         # CLI uses 1-based indices, but we use 0-based indices internally
         channels = np.array(args.channels) - 1
         if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
-            raise ValueError(f"Channel indices must be between 1 and {img.n_channels}.")
+            parser.error(f"Channel indices must be between 1 and {img.n_channels}.")
     with warnings.catch_warnings():
         # Make sure warning about duplicate channels are printed using 1-based indices
         warnings.formatwarning = formatwarning_duplicate_channel
