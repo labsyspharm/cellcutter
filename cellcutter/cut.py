@@ -256,8 +256,8 @@ def process_image(
             )
     n_cells = array_shape[1]
     # Only load required channels
-    img_shape = (len(channels),) + img.base_series.shape[1:]
-    n_bytes_img = img.dtype.itemsize * np.prod(img_shape)
+    img_shape = np.array((len(channels),) + img.base_series.shape[1:], dtype=np.int64)
+    n_bytes_img = int(img.dtype.itemsize * np.prod(img_shape))
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=processes
     ) as executor, SharedMemoryManager() as smm:
