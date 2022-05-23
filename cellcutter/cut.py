@@ -162,8 +162,6 @@ def process_image(
     if not isinstance(segmentation_mask, Image):
         segmentation_mask = Image(segmentation_mask)
     destination = pathlib.Path(destination)
-    if use_zip:
-        destination = destination.with_suffix(".zip")
     logging.info("Loading segmentation mask")
     segmentation_mask_img = segmentation_mask.get_channel(0)
     logging.info(
