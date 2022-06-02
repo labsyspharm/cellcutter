@@ -1,7 +1,8 @@
 import itertools
 import pathlib
 import zipfile
-from typing import Union, Tuple
+from multiprocessing.shared_memory import SharedMemory
+from typing import Union, Tuple, Optional
 
 import numpy as np
 import tifffile
@@ -31,6 +32,13 @@ def zip_dir(dir: Union[pathlib.Path, str], zip_file: Union[pathlib.Path, str]) -
             zf.write(f, f.relative_to(dir))
 
 
+class SharedNumpyArraySpec:
+    def __init__(self, address: str, shape: Tuple[int, ...], dtype: np.dtype):
+        self.address = address
+        self.shape = shape
+        self.dtype = dtype
+
+
 def padded_subset(
     img: Union[zarr.Array, np.ndarray], x: int, y: int, window_size: Tuple[int, int]
 ) -> np.ndarray:
@@ -45,8 +53,14 @@ def padded_subset(
         (max(0, s[1][0]), min(wh[1], s[1][1])),
     )
     s_out = (
-        (max(0, -s[0][0]), min(window_size[0], window_size[0] - s[0][1] + wh[0]),),
-        (max(0, -s[1][0]), min(window_size[1], window_size[1] - s[1][1] + wh[1]),),
+        (
+            max(0, -s[0][0]),
+            min(window_size[0], window_size[0] - s[0][1] + wh[0]),
+        ),
+        (
+            max(0, -s[1][0]),
+            min(window_size[1], window_size[1] - s[1][1] + wh[1]),
+        ),
     )
     out = np.zeros(img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype)
     out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img[
