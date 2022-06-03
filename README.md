@@ -71,7 +71,7 @@ optional arguments:
 
 ## Example
 
-Example data are available for [download at mcmicro.org](https://mcmicro.org/datasets.html).
+Example data are available for [download at mcmicro.org](https://mcmicro.org/datasets).
 
 ```
 cut_cells exemplar-001/registration/exemplar-001.ome.tif \
