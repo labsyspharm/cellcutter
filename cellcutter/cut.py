@@ -12,7 +12,14 @@ import zarr
 from numcodecs import Blosc
 from skimage.measure import regionprops_table
 
-from .utils import padded_subset, range_all, pairwise, zip_dir, Image
+from .utils import (
+    padded_subset,
+    range_all,
+    pairwise,
+    zip_dir,
+    Image,
+    SharedNumpyArraySpec,
+)
 
 
 class DuplicateChannelWarning(Warning):
@@ -58,7 +65,7 @@ def cut_cell_range(
     cell_range: Tuple[int, int],
     window_size: int,
     cut_array: zarr.Array,
-    mask_thumbnails: Optional[zarr.Array] = None,
+    mask_thumbnails: Optional[Union[zarr.Array, np.ndarray]] = None,
     cache_size: int = 1024 * 1024 * 1024,
     channels: Optional[Iterable[int]] = None,
 ) -> None:
@@ -83,45 +90,60 @@ def cut_cell_range(
         channels=channels,
     )
     cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
+    try:
+        logging.info(
+            f"Cache hits: {image.zarr.store.hits} Cache misses: {image.zarr.store.misses}"
+        )
+    except Exception:
+        pass
 
 
 def cut_cell_range_shared_mem(
-    image: str,
-    address: str,
+    img_spec: SharedNumpyArraySpec,
     cell_data: pd.DataFrame,
     cell_range: Tuple[int, int],
     window_size: int,
     cut_array: zarr.Array,
-    mask_thumbnails: Optional[zarr.Array] = None,
-    channels: Optional[Iterable[int]] = None,
+    mask_thumbnails_spec: Optional[SharedNumpyArraySpec] = None,
 ) -> None:
     "Cut the given range of cells from a TIFF image in shared memory and write them into the given Zarr or Numpy array."
-    img = Image(image)
-    sm = SharedMemory(name=address)
-    img_shape = list(img.base_series.shape)
-    if channels is not None:
-        img_shape[0] = len(channels)
-    img_array = np.ndarray(img_shape, dtype=img.dtype, buffer=sm.buf)
-    cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
-    cell_stack_temp = np.empty(
-        (
-            img.n_channels if channels is None else len(channels),
-            cell_range[1] - cell_range[0],
+    try:
+        img_sm = SharedMemory(img_spec.address)
+        img_array = np.ndarray(
+            img_spec.shape,
+            dtype=img_spec.dtype,
+            buffer=img_sm.buf,
+        )
+        mask_thumbnails = None
+        if mask_thumbnails_spec is not None:
+            mask_sm = SharedMemory(mask_thumbnails_spec.address)
+            mask_thumbnails = np.ndarray(
+                mask_thumbnails_spec.shape, dtype=mask_thumbnails_spec.dtype, buffer=mask_sm.buf
+            )
+        cell_data_subset = cell_data.iloc[cell_range[0] : cell_range[1]]
+        cell_stack_temp = np.empty(
+            (
+                img_array.shape[0],
+                cell_range[1] - cell_range[0],
+                window_size,
+                window_size,
+            ),
+            dtype=img_array.dtype,
+        )
+        cut_cells(
+            img_array,
+            cell_data_subset,
             window_size,
-            window_size,
-        ),
-        dtype=img.dtype,
-    )
-    cut_cells(
-        img_array,
-        cell_data_subset,
-        window_size,
-        cell_stack_temp,
-        mask_thumbnails,
-        # Input image already only includes the channels we want
-        channels=None,
-    )
-    cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
+            cell_stack_temp,
+            mask_thumbnails,
+            # Input image already only includes the channels we want
+            channels=None,
+        )
+        cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
+    finally:
+        img_sm.close()
+        if mask_thumbnails_spec is not None:
+            mask_sm.close()
 
 
 def find_bbox_size(segmentation_mask: np.ndarray) -> int:
@@ -162,8 +184,6 @@ def process_image(
     if not isinstance(segmentation_mask, Image):
         segmentation_mask = Image(segmentation_mask)
     destination = pathlib.Path(destination)
-    if use_zip:
-        destination = destination.with_suffix(".zip")
     logging.info("Loading segmentation mask")
     segmentation_mask_img = segmentation_mask.get_channel(0)
     logging.info(
@@ -238,7 +258,8 @@ def process_image(
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
         )
         mask_thumbnails_temp = np.empty(
-            (cell_data.shape[0], window_size, window_size), dtype=np.bool_,
+            (cell_data.shape[0], window_size, window_size),
+            dtype=np.bool_,
         )
         cut_cells(
             segmentation_mask_img,
@@ -252,45 +273,67 @@ def process_image(
         if use_zip:
             logging.debug(f"Zipping up mask to {destination_mask}")
             zip_dir(
-                mask_store.path, destination_mask,
+                mask_store.path,
+                destination_mask,
             )
     n_cells = array_shape[1]
     # Only load required channels
-    img_shape = (len(channels),) + img.base_series.shape[1:]
-    n_bytes_img = img.dtype.itemsize * np.prod(img_shape)
+    img_shape = np.array((len(channels),) + img.base_series.shape[1:], dtype=np.int64)
+    n_bytes_img = int(img.dtype.itemsize * np.prod(img_shape))
+    n_bytes_mask = (
+        int(
+            mask_thumbnails.dtype.itemsize
+            * np.prod(np.array(mask_thumbnails.shape, dtype=np.int64))
+        )
+        if mask_thumbnails is not None
+        else 0
+    )
+    n_bytes_total = n_bytes_img + n_bytes_mask
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=processes
     ) as executor, SharedMemoryManager() as smm:
-        if n_bytes_img < cache_size:
+        if n_bytes_total < cache_size:
             logging.info(
-                f"Image size ({round(n_bytes_img / 1024**2)} MB) is smaller "
+                f"Image size ({round(n_bytes_total / 1024**2)} MB) is smaller "
                 f"than cache size ({round(cache_size / 1024**2)} MB). "
                 "Loading entire image into memory."
             )
             raw_sm = smm.SharedMemory(size=n_bytes_img)
             img_array = np.ndarray(img_shape, dtype=img.dtype, buffer=raw_sm.buf)
             img_array[...] = img.zarr.oindex[channels, :, :]
+            if mask_thumbnails is not None:
+                raw_sm_mask = smm.SharedMemory(size=n_bytes_mask)
+                mask_thumbnails_array = np.ndarray(
+                    mask_thumbnails.shape,
+                    dtype=mask_thumbnails.dtype,
+                    buffer=raw_sm_mask.buf,
+                )
+                mask_thumbnails_array[...] = mask_thumbnails[...]
             futures = {
                 executor.submit(
                     cut_cell_range_shared_mem,
-                    img.path,
-                    raw_sm.name,
+                    SharedNumpyArraySpec(raw_sm.name, img_array.shape, img_array.dtype),
                     cell_data=cell_data,
                     cell_range=cell_range,
                     window_size=window_size,
                     cut_array=file,
-                    mask_thumbnails=mask_thumbnails,
-                    channels=channels,
+                    mask_thumbnails_spec=SharedNumpyArraySpec(
+                        raw_sm_mask.name, mask_thumbnails.shape, mask_thumbnails.dtype
+                    )
+                    if mask_thumbnails is not None
+                    else None,
                 ): cell_range
                 for cell_range in pairwise(range_all(0, n_cells, array_chunks[1]))
             }
         else:
             logging.warn(
-                f"Image size ({round(n_bytes_img / 1024**2)} MB) is larger than "
+                f"Image size ({round(n_bytes_total / 1024**2)} MB) is larger than "
                 f"cache size ({round(cache_size / 1024**2)} MB). "
                 "This results in many reads from disk and will be slow. Consider "
                 "increasing the cache size."
             )
+            if processes > 1:
+                logging.warn("Processing in parallel may be slow with small caches. Consider using -p 1.")
             futures = {
                 executor.submit(
                     cut_cell_range,

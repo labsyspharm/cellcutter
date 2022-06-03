@@ -14,10 +14,10 @@ pip install cellcutter
 ## Usage
 
 ```
-cut_cells [-h] [-p P] [-z] [--window-size WINDOW_SIZE] [--mask-cells]
+usage: cut_cells [-h] [-p P] [-z] [-f] [--window-size WINDOW_SIZE] [--mask-cells]
+                 [--channels [CHANNELS ...]] [--cache-size CACHE_SIZE]
                  [--chunk-size CHUNK_SIZE | --cells-per-chunk CELLS_PER_CHUNK]
-                 [--cache-size CACHE_SIZE] [--channels [CHANNELS ...]]
-                 IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION
+                 IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION.zarr
 
 Cut out thumbnail images of all cells. Thumbnails will be stored as Zarr array
 (https://zarr.readthedocs.io/en/stable/index.html) with dimensions [#channels, #cells,
@@ -33,18 +33,30 @@ positional arguments:
                         (must correspond to the cell IDs in the segmentation mask), Y_centroid,
                         and X_centroid (the coordinates of cell centroids). Only cells represented
                         in the given CSV file will be used, even if additional cells are present
-                        in the segmentation mask. Cells are written to the file in the same order
-                        as they appear in the CSV file.
-  DESTINATION           Path to a new directory where cell thumbnails will be stored in Zarr
-                        format.
+                        in the segmentation mask. Cells are written to the Zarr array in the same
+                        order as they appear in the CSV file.
+  DESTINATION.zarr      Path to a new directory where cell thumbnails will be stored in Zarr
+                        format. Must end in '.zarr' and must not already exist. These restrictions
+                        can be lifted by using the '-f/--force' flag.
 
 optional arguments:
   -h, --help            show this help message and exit
   -p P                  Number of processes run in parallel.
   -z                    Store thumbnails in a single zip file instead of a directory.
+  -f, --force           Overwrite existing destination directory and don't enforce '.zarr'
+                        extension.
   --window-size WINDOW_SIZE
                         Size of the cell thumbnail in pixels. Defaults to size of largest cell.
   --mask-cells          Fill every pixel not occupied by the target cell with zeros.
+  --channels [CHANNELS ...]
+                        Indices of channels (1-based) to include in the output e.g., --channels 1
+                        3 5. Channels are included in the file in the given order. If not
+                        specified, by default all channels are included. This option must be
+                        *after* all positional arguments.
+  --cache-size CACHE_SIZE
+                        Cache size for reading image tiles in MB. For best performance the cache
+                        size should be larger than the size of the image. (Default: 10240 MB = 10
+                        GB)
   --chunk-size CHUNK_SIZE
                         Desired uncompressed chunk size in MB. (See
                         https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations)
@@ -55,15 +67,6 @@ optional arguments:
                         Desired number of cells stored per Zarr array chunk. By default this is
                         determined automatically using the chunk size parameter. Setting this
                         option overrides the chunk size parameter.
-  --cache-size CACHE_SIZE
-                        Cache size for reading image tiles in MB. For best performance the cache
-                        size should be larger than the size of the image. (Default: 10240 MB = 10
-                        GB)
-  --channels [CHANNELS ...]
-                        Indices of channels (1-based) to include in the output e.g., --channels 1
-                        3 5. Channels are included in the file in the given order. If not
-                        specified, by default all channels are included. This option must be
-                        *after* all positional arguments.
 ```
 
 ## Example
