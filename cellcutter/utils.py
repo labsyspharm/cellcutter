@@ -73,18 +73,14 @@ class Image:
     def __init__(self, path: str, cache_size: int = 1024 * 1024 * 1024):
         self.path = path
         self.image = tifffile.TiffFile(path)
-        # Check if we have a TIFF files created using the new pyramid scheme
-        # Update images using https://github.com/labsyspharm/ome-tiff-pyramid-tools/blob/master/pyramid_upgrade.py
-        if "Faas" in self.image.pages[0].software:
-            raise ValueError(
-                f"Image is created using an old pyramid encoding scheme: {path}\n"
-                "Please update using https://github.com/labsyspharm/ome-tiff-pyramid-tools/blob/master/pyramid_upgrade.py"
-            )
         self.base_series = self.image.series[0]
         self.cache_size = cache_size
         self.zarr = zarr.open(
             zarr.LRUStoreCache(self.image.aszarr(series=0), self.cache_size), mode="r"
-        )[0]
+        )
+        # If we get a group back assume that the first group is highest resolution
+        if isinstance(self.zarr, zarr.Group):
+            self.zarr = self.zarr[0]
 
     def get_channel(self, channel_index: int) -> np.ndarray:
         return self.base_series.pages[channel_index].asarray()
