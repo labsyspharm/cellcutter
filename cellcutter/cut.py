@@ -278,7 +278,11 @@ def process_image(
             )
     n_cells = array_shape[1]
     # Only load required channels
-    img_shape = np.array((len(channels),) + img.base_series.shape[1:], dtype=np.int64)
+    if img.n_channels == 1:
+        var = img.base_series.shape[:]
+    else:
+        var = img.base_series.shape[1:]
+    img_shape = np.array((len(channels),) + var, dtype=np.int64)
     n_bytes_img = int(img.dtype.itemsize * np.prod(img_shape))
     n_bytes_mask = (
         int(
@@ -300,7 +304,12 @@ def process_image(
             )
             raw_sm = smm.SharedMemory(size=n_bytes_img)
             img_array = np.ndarray(img_shape, dtype=img.dtype, buffer=raw_sm.buf)
-            img_array[...] = img.zarr.oindex[channels, :, :]
+
+            if img.n_channels == 1:
+                img_array[...] = img.zarr.oindex[:, :]
+            else:
+                img_array[...] = img.zarr.oindex[channels, :, :]
+
             if mask_thumbnails is not None:
                 raw_sm_mask = smm.SharedMemory(size=n_bytes_mask)
                 mask_thumbnails_array = np.ndarray(
