@@ -1,0 +1,40 @@
+{% set name = "cellcutter" %}
+{% set version = "0.2.7" %}
+
+package:
+  name: "{{ name|lower }}"
+  version: "{{ version }}"
+
+source:
+  url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz
+  sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+build:
+  number: 0
+  script: "{{ PYTHON }} -m pip install . --no-deps --ignore-installed -vv "
+  entry_points:
+    - cut_cells=cellcutter.cli:cut
+  noarch: python
+
+requirements:
+  host:
+    - pip
+    - python>=3.8
+  run:
+    - python>=3.8
+    - scikit-image
+    - numpy
+    - pandas
+    - tifffile
+    - zarr
+    - numcodecs
+
+test:
+  imports:
+    - cellcutter.cli
+
+about:
+  home: https://github.com/labsyspharm/cellcutter
+  license: MIT
+  license_family: BSD
+  summary: Create thumbnails of cells in a given image
