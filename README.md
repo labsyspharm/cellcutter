@@ -17,7 +17,7 @@ pip install cellcutter
 usage: cut_cells [-h] [-p P] [-z] [-f] [--window-size WINDOW_SIZE] [--mask-cells]
                  [--channels [CHANNELS ...]] [--cache-size CACHE_SIZE]
                  [--chunk-size CHUNK_SIZE | --cells-per-chunk CELLS_PER_CHUNK]
-                 IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION.zarr
+                 IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION
 
 Cut out thumbnail images of all cells. Thumbnails will be stored as Zarr array
 (https://zarr.readthedocs.io/en/stable/index.html) with dimensions [#channels, #cells,
@@ -35,16 +35,14 @@ positional arguments:
                         in the given CSV file will be used, even if additional cells are present
                         in the segmentation mask. Cells are written to the Zarr array in the same
                         order as they appear in the CSV file.
-  DESTINATION.zarr      Path to a new directory where cell thumbnails will be stored in Zarr
-                        format. Must end in '.zarr' and must not already exist. These restrictions
-                        can be lifted by using the '-f/--force' flag.
+  DESTINATION           Path to a new directory where cell thumbnails will be stored in Zarr
+                        format. Use -z to store thumbnails in a single zip file instead.
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -p P                  Number of processes run in parallel.
   -z                    Store thumbnails in a single zip file instead of a directory.
-  -f, --force           Overwrite existing destination directory and don't enforce '.zarr'
-                        extension.
+  -f, --force           Overwrite existing destination directory.
   --window-size WINDOW_SIZE
                         Size of the cell thumbnail in pixels. Defaults to size of largest cell.
   --mask-cells          Fill every pixel not occupied by the target cell with zeros.
