@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import shutil
+import sys
 import warnings
 
 import numpy as np
@@ -16,7 +17,7 @@ def formatwarning_duplicate_channel(*args, **kwargs):
     return str(args[0])
 
 
-def cut():
+def cut(args=None):
     parser = argparse.ArgumentParser(
         description="""Cut out thumbnail images of all cells.
 
@@ -47,10 +48,9 @@ def cut():
         "the Zarr array in the same order as they appear in the CSV file.",
     )
     parser.add_argument(
-        "DESTINATION", metavar="DESTINATION.zarr",
+        "DESTINATION", metavar="DESTINATION",
         help="Path to a new directory where cell thumbnails will be stored in Zarr format. "
-        "Must end in '.zarr' and must not already exist. These restrictions can be lifted by "
-        "using the '-f/--force' flag.",
+        "Use -z to store thumbnails in a single zip file instead. ",
     )
     parser.add_argument(
         "-p", default=1, type=int, help="Number of processes run in parallel.",
@@ -65,7 +65,7 @@ def cut():
         "-f", "--force",
         default=False,
         action="store_true",
-        help="Overwrite existing destination directory and don't enforce '.zarr' extension.",
+        help="Overwrite existing destination directory.",
     )
     parser.add_argument(
         "--window-size",
@@ -115,17 +115,13 @@ def cut():
         "overrides the chunk size parameter.",
     )
 
-    args = parser.parse_intermixed_args()
+    args = parser.parse_intermixed_args(args)
     logging.basicConfig(
         format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
         level=os.environ.get("LOGLEVEL", "INFO").upper(),
     )
     logging.captureWarnings(True)
     logging.info(args)
-    if not args.DESTINATION.endswith(".zarr") and not args.force:
-        parser.error(
-            "Destination must end in '.zarr' unless '-f/--force' is used."
-        )
     if os.path.exists(args.DESTINATION):
         if not args.force:
             parser.error(
@@ -168,3 +164,6 @@ def cut():
             cache_size=args.cache_size * 1024 * 1024,
         )
     logging.info("Done")
+
+if __name__ == "__main__":
+    cut(sys.argv[1:])
