@@ -164,10 +164,66 @@ def find_chunk_size(
     return tuple(int(x) for x in (shape[0], cells_per_chunk, shape[2], shape[3]))
 
 
+def rois_from_cell_data(
+    cell_data: pd.DataFrame,
+    window_size: Optional[int] = None,
+    segmentation_mask: Optional[np.ndarray] = None,
+) -> Tuple[pd.DataFrame, int, Optional[np.ndarray]]:
+    if segmentation_mask is not None:
+        logging.info(
+            "Check if all cell IDs from the CSV are represented in the segmentation mask"
+        )
+        cell_ids_not_in_segmentation_mask = np.in1d(
+            cell_data["CellID"], segmentation_mask, invert=True
+        )
+        n_not_in_segmentation_mask = np.sum(cell_ids_not_in_segmentation_mask)
+        if n_not_in_segmentation_mask > 0:
+            raise ValueError(
+                f"{n_not_in_segmentation_mask} cell IDs in the CELL_DATA CSV file are not represented in the segmentation mask. "
+                "Please check that the segmentation mask contains all cell IDs present in the CSV file. "
+                f"The first 10 problematic IDs are {' '.join(str(x) for x in cell_data['CellID'][cell_ids_not_in_segmentation_mask][:10])}"
+            )
+        del cell_ids_not_in_segmentation_mask
+        logging.info("Remove cells from segmentation mask that are not present in the CSV")
+        segmentation_mask[
+            np.isin(segmentation_mask, cell_data["CellID"], invert=True)
+        ] = 0
+    if window_size is None:
+        logging.info("Finding window size")
+        window_size = find_bbox_size(segmentation_mask)
+        logging.info(f"Window size automatically set to {window_size}")
+    return cell_data, window_size, segmentation_mask
+
+
+def rois_from_grid(
+    img: Union[str, Image],
+    window_size: int,
+    step_size: int,
+    offsets: Tuple[int, int] = (0, 0),
+) -> pd.DataFrame:
+    if not isinstance(img, Image):
+        img = Image(img)
+    width, height = img.width_height
+    y_centroids = np.arange(
+        window_size // 2 + offsets[0], width - window_size // 2, step_size
+    )
+    x_centroids = np.arange(
+        window_size // 2 + offsets[1], height - window_size // 2, step_size
+    )
+    x_i, y_i = np.meshgrid(x_centroids, y_centroids)
+    return pd.DataFrame(
+        {
+            "CellID": np.arange(x_i.size),
+            "X_centroid": x_i.ravel(),
+            "Y_centroid": y_i.ravel(),
+        }
+    )
+
+
 def process_image(
     img: Union[str, Image],
-    segmentation_mask: Union[str, Image],
-    cell_data: pd.DataFrame,
+    roi_data: pd.DataFrame,
+    segmentation_mask: Optional[np.ndarray],
     destination: Union[pathlib.Path, str],
     window_size: Optional[int] = None,
     mask_cells: bool = True,
@@ -178,36 +234,17 @@ def process_image(
     use_zip: bool = False,
     cache_size: int = 1024 * 1024 * 1024,
 ) -> None:
-    "Given an image, segmentation mask, and cell positions, cut out cells and write a stack of cell thumbnails in Zarr format."
+    "Given an image, cell positions, cut out cells and write a stack of cell thumbnails in Zarr format."
     if not isinstance(img, Image):
         img = Image(img)
-    if not isinstance(segmentation_mask, Image):
-        segmentation_mask = Image(segmentation_mask)
-    destination = pathlib.Path(destination)
-    logging.info("Loading segmentation mask")
-    segmentation_mask_img = segmentation_mask.get_channel(0)
-    logging.info(
-        "Check if all cell IDs from the CSV are represented in the segmentation mask"
-    )
-    cell_ids_not_in_segmentation_mask = np.in1d(
-        cell_data["CellID"], segmentation_mask_img, invert=True
-    )
-    n_not_in_segmentation_mask = np.sum(cell_ids_not_in_segmentation_mask)
-    if n_not_in_segmentation_mask > 0:
-        raise ValueError(
-            f"{n_not_in_segmentation_mask} cell IDs in the CELL_DATA CSV file are not represented in the segmentation mask. "
-            "Please check that the segmentation mask contains all cell IDs present in the CSV file. "
-            f"The first 10 problematic IDs are {' '.join(str(x) for x in cell_data['CellID'][cell_ids_not_in_segmentation_mask][:10])}"
-        )
-    del cell_ids_not_in_segmentation_mask
-    logging.info("Remove cells from segmentation mask that are not present in the CSV")
-    segmentation_mask_img[
-        np.isin(segmentation_mask_img, cell_data["CellID"], invert=True)
-    ] = 0
+    segmentation_mask_necessary = mask_cells or window_size is None
+    if segmentation_mask is None and segmentation_mask_necessary:
+        raise ValueError("Segmentation mask is necessary when masking cells or window size is not given.")
     if window_size is None:
         logging.info("Finding window size")
-        window_size = find_bbox_size(segmentation_mask_img)
-    logging.info(f"Use window size {window_size}")
+        window_size = find_bbox_size(segmentation_mask)
+        logging.info(f"Window size automatically set to {window_size}")
+    destination = pathlib.Path(destination)
     if channels is None:
         channels = np.arange(img.n_channels)
     else:
@@ -217,7 +254,7 @@ def process_image(
         channels = np.array(channels)
     if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
         raise ValueError(f"Channel indices must be between 0 and {img.n_channels - 1}.")
-    array_shape = (len(channels), cell_data.shape[0], window_size, window_size)
+    array_shape = (len(channels), roi_data.shape[0], window_size, window_size)
     if cells_per_chunk is None:
         array_chunks = find_chunk_size(
             array_shape, np.dtype(img.dtype).itemsize, target_bytes=target_chunk_size
@@ -252,18 +289,18 @@ def process_image(
         mask_thumbnails = zarr.create(
             store=mask_store,
             overwrite=True,
-            shape=(cell_data.shape[0], window_size, window_size),
+            shape=(roi_data.shape[0], window_size, window_size),
             dtype=np.bool_,
             compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
         )
         mask_thumbnails_temp = np.empty(
-            (cell_data.shape[0], window_size, window_size),
+            (roi_data.shape[0], window_size, window_size),
             dtype=np.bool_,
         )
         cut_cells(
-            segmentation_mask_img,
-            cell_data,
+            segmentation_mask,
+            roi_data,
             window_size,
             mask_thumbnails_temp,
             create_mask_thumbnails=True,
@@ -322,7 +359,7 @@ def process_image(
                 executor.submit(
                     cut_cell_range_shared_mem,
                     SharedNumpyArraySpec(raw_sm.name, img_array.shape, img_array.dtype),
-                    cell_data=cell_data,
+                    cell_data=roi_data,
                     cell_range=cell_range,
                     window_size=window_size,
                     cut_array=file,
@@ -347,7 +384,7 @@ def process_image(
                 executor.submit(
                     cut_cell_range,
                     img.path,
-                    cell_data=cell_data,
+                    cell_data=roi_data,
                     cell_range=cell_range,
                     window_size=window_size,
                     cut_array=file,

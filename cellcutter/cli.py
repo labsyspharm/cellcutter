@@ -17,6 +17,20 @@ def formatwarning_duplicate_channel(*args, **kwargs):
     return str(args[0])
 
 
+def check_and_prepare_destination(destination, force, parser):
+    if os.path.exists(destination):
+        if not force:
+            parser.error(
+                "Destination file or directory already exists. Use '-f/--force' to overwrite."
+            )
+        else:
+            # Preemptively remove destination directory or file
+            if os.path.isfile(destination):
+                os.remove(destination)
+            else:
+                shutil.rmtree(destination)
+
+
 def cut(args=None):
     parser = argparse.ArgumentParser(
         description="""Cut out thumbnail images of all cells.
@@ -122,17 +136,7 @@ def cut(args=None):
     )
     logging.captureWarnings(True)
     logging.info(args)
-    if os.path.exists(args.DESTINATION):
-        if not args.force:
-            parser.error(
-                "Destination directory already exists. Use '-f/--force' to overwrite."
-            )
-        else:
-            # Preemptively remove destination directory or file
-            if os.path.isfile(args.DESTINATION):
-                os.remove(args.DESTINATION)
-            else:
-                shutil.rmtree(args.DESTINATION)
+    check_and_prepare_destination(args.DESTINATION, args.force, parser)
     img = cut_mod.Image(args.IMAGE)
     segmentation_mask_img = cut_mod.Image(args.SEGMENTATION_MASK)
     logging.info("Loading cell data")
@@ -165,5 +169,126 @@ def cut(args=None):
         )
     logging.info("Done")
 
-if __name__ == "__main__":
-    cut(sys.argv[1:])
+
+def cut_tiles(args=None):
+    parser = argparse.ArgumentParser(
+        description="""Cut out tiles in a regular grid from an image.
+
+        Tiles will be stored as Zarr array (https://zarr.readthedocs.io/en/stable/index.html)
+        with dimensions [#channels, #tiles, tile_size, tile_size].
+        """,
+    )
+    parser.add_argument(
+        "IMAGE",
+        help="Path to image in TIFF format, potentially with multiple channels. "
+        "Thumbnails will be created from each channel.",
+    )
+    parser.add_argument(
+        "WINDOW_SIZE", metavar="WINDOW_SIZE", type=int,
+        help="Size of the tiles in pixels.",
+    )
+    parser.add_argument(
+        "DESTINATION", metavar="DESTINATION",
+        help="Path to a new directory where tiles will be stored in Zarr format. "
+        "Use -z to store tiles in a single zip file instead. ",
+    )
+    parser.add_argument(
+        "--step-size", default=None, type=int,
+        help="Step size for the grid. Defaults to the window size to create a "
+        "non-overlapping grid.",
+    )
+    parser.add_argument(
+        "-p", default=1, type=int, help="Number of processes run in parallel.",
+    )
+    parser.add_argument(
+        "-z",
+        default=False,
+        action="store_true",
+        help="Store thumbnails in a single zip file instead of a directory.",
+    )
+    parser.add_argument(
+        "-f", "--force",
+        default=False,
+        action="store_true",
+        help="Overwrite existing destination directory.",
+    )
+    parser.add_argument(
+        "--channels",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Indices of channels (1-based) to include in the output e.g., --channels 1 3 5. "
+        "Channels are included in the file in the given order. If not specified, by default all channels are included. "
+        "This option must be *after* all positional arguments.",
+    )
+    parser.add_argument(
+        "--save-metadata",
+        default=None,
+        help="Save a csv file with the metadata of the tiles.",
+    )
+    parser.add_argument(
+        "--cache-size",
+        default=10 * 1024,
+        type=int,
+        help="Cache size for reading image tiles in MB. For best performance the cache "
+        "size should be larger than the size of the image. "
+        "(Default: 10240 MB = 10 GB)",
+    )
+    chunk_size_group = parser.add_mutually_exclusive_group()
+    chunk_size_group.add_argument(
+        "--chunk-size",
+        default=32,
+        type=int,
+        help="Desired uncompressed chunk size in MB. "
+        "(See https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations) "
+        "Since the other chunk dimensions are fixed as [#channels, #tiles, window_size, window_size], "
+        "this argument determines the number of tiles per chunk. (Default: 32 MB)",
+    )
+    chunk_size_group.add_argument(
+        "--tiles-per-chunk",
+        default=None,
+        type=int,
+        help="Desired number of tiles stored per Zarr array chunk. By default this is "
+        "determined automatically using the chunk size parameter. Setting this option "
+        "overrides the chunk size parameter.",
+    )
+
+    args = parser.parse_intermixed_args(args)
+    logging.basicConfig(
+        format="%(processName)s %(asctime)s %(levelname)s: %(message)s",
+        level=os.environ.get("LOGLEVEL", "INFO").upper(),
+    )
+    logging.captureWarnings(True)
+    logging.info(args)
+    check_and_prepare_destination(args.DESTINATION, args.force, parser)
+    img = cut_mod.Image(args.IMAGE)
+
+    channels = None
+    if args.channels:
+        # CLI uses 1-based indices, but we use 0-based indices internally
+        channels = np.array(args.channels) - 1
+        if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
+            parser.error(f"Channel indices must be between 1 and {img.n_channels}.")
+    roi_df = cut_mod.rois_from_grid(
+        img, args.window_size, args.step_size
+    )
+    if args.save_metadata:
+        roi_df.to_csv(args.save_metadata, index=False)
+    with warnings.catch_warnings():
+        # Make sure warning about duplicate channels are printed using 1-based indices
+        warnings.formatwarning = formatwarning_duplicate_channel
+        cut_mod.process_image(
+            img,
+            roi_data=roi_df,
+            segmentation_mask=None,
+            destination=args.DESTINATION,
+            window_size=args.window_size,
+            mask_cells=False,
+            processes=args.p,
+            target_chunk_size=args.chunk_size * 1024 * 1024,
+            cells_per_chunk=args.cells_per_chunk,
+            channels=channels,
+            use_zip=args.z,
+            cache_size=args.cache_size * 1024 * 1024,
+        )
+    logging.info("Done")
