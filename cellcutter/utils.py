@@ -2,7 +2,7 @@ import itertools
 import pathlib
 import zipfile
 from multiprocessing.shared_memory import SharedMemory
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple, Any
 
 import numpy as np
 import tifffile
@@ -40,33 +40,29 @@ class SharedNumpyArraySpec:
 
 
 def padded_subset(
-    img: Union[zarr.Array, np.ndarray], x_start: int, x_stop: int, y_start: int, y_stop: int
+    img: Union[zarr.Array, np.ndarray], x_start: int, x_stop: int, y_start: int, y_stop: int, fill_value: Any = 0
 ) -> np.ndarray:
-    "Return a subset of the image with the given window size padded with zero if window is partially outside the image"
-    wh = img.shape[-2:]
-    s = (
-        (y_start, y_stop),
-        (x_start, x_stop),
+    """Return a slice of the array with the given window size padded with fill_value if the slice is out of bounds.
+    Assumes that the coordinates are the last two dimensions of the array.
+    """
+    output_shape = img.shape[:-2] + (
+        y_stop - y_start,
+        x_stop - x_start
     )
-    window_size = (x_stop - x_start, y_stop - y_start)
-    s_img = (
-        (max(0, s[0][0]), min(wh[0], s[0][1])),
-        (max(0, s[1][0]), min(wh[1], s[1][1])),
-    )
-    s_out = (
-        (
-            max(0, -s[0][0]),
-            min(window_size[0], window_size[0] - s[0][1] + wh[0]),
-        ),
-        (
-            max(0, -s[1][0]),
-            min(window_size[1], window_size[1] - s[1][1] + wh[1]),
-        ),
-    )
-    out = np.zeros(img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype)
-    img_subset = img[..., s_img[0][0] : s_img[0][1], s_img[1][0] : s_img[1][1]]
-    out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img_subset
-    return out
+    output_array = np.full(output_shape, fill_value, dtype=img.dtype)
+
+    row_start = max(y_start, 0)
+    row_end = min(y_stop, img.shape[-2])
+    col_start = max(x_start, 0)
+    col_end = min(x_stop, img.shape[-1])
+
+    output_array[
+        ...,
+        row_start - y_start:row_end - y_start,
+        col_start - x_start:col_end - x_start
+    ] = img[..., row_start:row_end, col_start:col_end]
+
+    return output_array
 
 
 class Image:
