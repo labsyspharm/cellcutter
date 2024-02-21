@@ -2,7 +2,6 @@ import argparse
 import logging
 import os
 import shutil
-import sys
 import warnings
 
 import numpy as np
@@ -50,7 +49,9 @@ def cut(args=None):
     parser.add_argument(
         "SEGMENTATION_MASK",
         help="Path to segmentation mask image in TIFF format. "
-        "Used to automatically chose window size and find cell outlines.",
+        "Used to automatically chose window size and find cell outlines. "
+        "It is optional if --window-size is given and --mask-cells is not used. "
+        "Pass \"-\" instead of a segmentation mask in that case.",
     )
     parser.add_argument(
         "CELL_DATA",
@@ -138,10 +139,27 @@ def cut(args=None):
     logging.info(args)
     check_and_prepare_destination(args.DESTINATION, args.force, parser)
     img = cut_mod.Image(args.IMAGE)
-    segmentation_mask_img = cut_mod.Image(args.SEGMENTATION_MASK)
+    if args.SEGMENTATION_MASK == "-":
+        if args.window_size is None:
+            parser.error(
+                "If segmentation mask is not provided, a window size must be specified."
+            )
+        if args.mask_cells:
+            parser.error(
+                "Masking cells is not supported without a segmentation mask."
+            )
+    if args.window_size is None or args.mask_cells:
+        segmentation_mask = cut_mod.Image(args.SEGMENTATION_MASK).get_channel(0)
+    else:
+        segmentation_mask = None
     logging.info("Loading cell data")
     cell_data_df = pd.read_csv(
         args.CELL_DATA, usecols=["CellID", "X_centroid", "Y_centroid"]
+    )
+    cell_data_df, window_size, segmentation_mask = cut_mod.rois_from_cell_data(
+        cell_data_df,
+        window_size=(args.window_size, args.window_size) if args.window_size else None,
+        segmentation_mask=segmentation_mask,
     )
     logging.info(f"Found {len(cell_data_df)} cells")
     channels = None
@@ -155,10 +173,10 @@ def cut(args=None):
         warnings.formatwarning = formatwarning_duplicate_channel
         cut_mod.process_image(
             img,
-            segmentation_mask_img,
             cell_data_df,
+            segmentation_mask,
             args.DESTINATION,
-            window_size=args.window_size,
+            window_size=window_size,
             mask_cells=args.mask_cells,
             processes=args.p,
             target_chunk_size=args.chunk_size * 1024 * 1024,
@@ -269,8 +287,13 @@ def cut_tiles(args=None):
         channels = np.array(args.channels) - 1
         if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
             parser.error(f"Channel indices must be between 1 and {img.n_channels}.")
+    step_size = args.step_size or args.WINDOW_SIZE
     roi_df = cut_mod.rois_from_grid(
-        img, args.window_size, args.step_size
+        img, (args.WINDOW_SIZE, args.WINDOW_SIZE), step_size
+    )
+    logging.info(
+        f"Cutting tiles with window size {args.WINDOW_SIZE} and step size {step_size}. "
+        f"Resulting in {len(roi_df)} tiles."
     )
     if args.save_metadata:
         roi_df.to_csv(args.save_metadata, index=False)
@@ -282,11 +305,11 @@ def cut_tiles(args=None):
             roi_data=roi_df,
             segmentation_mask=None,
             destination=args.DESTINATION,
-            window_size=args.window_size,
+            window_size=(args.WINDOW_SIZE, args.WINDOW_SIZE),
             mask_cells=False,
             processes=args.p,
             target_chunk_size=args.chunk_size * 1024 * 1024,
-            cells_per_chunk=args.cells_per_chunk,
+            cells_per_chunk=args.tiles_per_chunk,
             channels=channels,
             use_zip=args.z,
             cache_size=args.cache_size * 1024 * 1024,

@@ -40,14 +40,15 @@ class SharedNumpyArraySpec:
 
 
 def padded_subset(
-    img: Union[zarr.Array, np.ndarray], x: int, y: int, window_size: Tuple[int, int]
+    img: Union[zarr.Array, np.ndarray], x_start: int, x_stop: int, y_start: int, y_stop: int
 ) -> np.ndarray:
     "Return a subset of the image with the given window size padded with zero if window is partially outside the image"
     wh = img.shape[-2:]
     s = (
-        (x - window_size[0] // 2, x + window_size[0] - window_size[0] // 2),
-        (y - window_size[1] // 2, y + window_size[1] - window_size[1] // 2),
+        (y_start, y_stop),
+        (x_start, x_stop),
     )
+    window_size = (x_stop - x_start, y_stop - y_start)
     s_img = (
         (max(0, s[0][0]), min(wh[0], s[0][1])),
         (max(0, s[1][0]), min(wh[1], s[1][1])),
@@ -63,9 +64,8 @@ def padded_subset(
         ),
     )
     out = np.zeros(img.shape[:-2] + (window_size[0], window_size[1]), dtype=img.dtype)
-    out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img[
-        ..., s_img[0][0] : s_img[0][1], s_img[1][0] : s_img[1][1]
-    ]
+    img_subset = img[..., s_img[0][0] : s_img[0][1], s_img[1][0] : s_img[1][1]]
+    out[..., s_out[0][0] : s_out[0][1], s_out[1][0] : s_out[1][1]] = img_subset
     return out
 
 

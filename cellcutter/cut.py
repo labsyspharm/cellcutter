@@ -37,18 +37,16 @@ class DuplicateChannelWarning(Warning):
 
 def cut_cells(
     img: Union[zarr.Array, np.ndarray],
-    cell_data: pd.DataFrame,
-    window_size: int,
+    roi_data: pd.DataFrame,
     cell_stack: Union[zarr.Array, np.ndarray],
     mask_thumbnails: Optional[Union[zarr.Array, np.ndarray]] = None,
     create_mask_thumbnails: bool = False,
     channels: Optional[Iterable[int]] = None,
 ) -> None:
     "Cut cells from a given image and write them into the given Zarr or Numpy array."
-    for i, c in enumerate(cell_data.itertuples()):
-        centroids = np.array([c.Y_centroid, c.X_centroid]).astype(int)
+    for i, c in enumerate(roi_data.itertuples()):
         thumbnail = padded_subset(
-            img, centroids[0], centroids[1], window_size=(window_size, window_size)
+            img, c.X_start, c.X_stop, c.Y_start, c.Y_stop
         )
         if create_mask_thumbnails:
             thumbnail = thumbnail == c.CellID
@@ -63,7 +61,7 @@ def cut_cell_range(
     image: str,
     cell_data: pd.DataFrame,
     cell_range: Tuple[int, int],
-    window_size: int,
+    window_size: Tuple[int, int],
     cut_array: zarr.Array,
     mask_thumbnails: Optional[Union[zarr.Array, np.ndarray]] = None,
     cache_size: int = 1024 * 1024 * 1024,
@@ -76,15 +74,14 @@ def cut_cell_range(
         (
             image.n_channels if channels is None else len(channels),
             cell_range[1] - cell_range[0],
-            window_size,
-            window_size,
+            window_size[0],
+            window_size[1],
         ),
         dtype=image.dtype,
     )
     cut_cells(
         image.zarr,
         cell_data_subset,
-        window_size,
         cell_stack_temp,
         mask_thumbnails,
         channels=channels,
@@ -102,7 +99,7 @@ def cut_cell_range_shared_mem(
     img_spec: SharedNumpyArraySpec,
     cell_data: pd.DataFrame,
     cell_range: Tuple[int, int],
-    window_size: int,
+    window_size: Tuple[int, int],
     cut_array: zarr.Array,
     mask_thumbnails_spec: Optional[SharedNumpyArraySpec] = None,
 ) -> None:
@@ -125,15 +122,14 @@ def cut_cell_range_shared_mem(
             (
                 img_array.shape[0],
                 cell_range[1] - cell_range[0],
-                window_size,
-                window_size,
+                window_size[0],
+                window_size[1],
             ),
             dtype=img_array.dtype,
         )
         cut_cells(
             img_array,
             cell_data_subset,
-            window_size,
             cell_stack_temp,
             mask_thumbnails,
             # Input image already only includes the channels we want
@@ -166,9 +162,9 @@ def find_chunk_size(
 
 def rois_from_cell_data(
     cell_data: pd.DataFrame,
-    window_size: Optional[int] = None,
+    window_size: Optional[Tuple[int, int]] = None,
     segmentation_mask: Optional[np.ndarray] = None,
-) -> Tuple[pd.DataFrame, int, Optional[np.ndarray]]:
+) -> Tuple[pd.DataFrame, Tuple[int, int], Optional[np.ndarray]]:
     if segmentation_mask is not None:
         logging.info(
             "Check if all cell IDs from the CSV are represented in the segmentation mask"
@@ -191,31 +187,34 @@ def rois_from_cell_data(
     if window_size is None:
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask)
+        window_size = (window_size, window_size)
         logging.info(f"Window size automatically set to {window_size}")
+    cell_data["X_start"] = cell_data["X_centroid"].astype(int) - window_size[0] // 2
+    cell_data["X_stop"] = cell_data["X_start"] + window_size[0]
+    cell_data["Y_start"] = cell_data["Y_centroid"].astype(int) - window_size[1] // 2
+    cell_data["Y_stop"] = cell_data["Y_start"] + window_size[1]
     return cell_data, window_size, segmentation_mask
 
 
 def rois_from_grid(
     img: Union[str, Image],
-    window_size: int,
+    window_size: Tuple[int, int],
     step_size: int,
-    offsets: Tuple[int, int] = (0, 0),
+    offset: Tuple[int, int] = (0, 0),
 ) -> pd.DataFrame:
     if not isinstance(img, Image):
         img = Image(img)
     width, height = img.width_height
-    y_centroids = np.arange(
-        window_size // 2 + offsets[0], width - window_size // 2, step_size
-    )
-    x_centroids = np.arange(
-        window_size // 2 + offsets[1], height - window_size // 2, step_size
-    )
-    x_i, y_i = np.meshgrid(x_centroids, y_centroids)
+    x_starts = np.arange(offset[0], width, step_size)
+    y_starts = np.arange(offset[1], height, step_size)
+    x_i, y_i = (v.ravel() for v in np.meshgrid(x_starts, y_starts))
     return pd.DataFrame(
         {
-            "CellID": np.arange(x_i.size),
-            "X_centroid": x_i.ravel(),
-            "Y_centroid": y_i.ravel(),
+            "TileID": np.arange(x_i.size),
+            "X_start": x_i,
+            "Y_start": y_i,
+            "X_stop": x_i + window_size[0],
+            "Y_stop": y_i + window_size[1],
         }
     )
 
@@ -225,7 +224,7 @@ def process_image(
     roi_data: pd.DataFrame,
     segmentation_mask: Optional[np.ndarray],
     destination: Union[pathlib.Path, str],
-    window_size: Optional[int] = None,
+    window_size: Optional[Tuple[int, int]] = None,
     mask_cells: bool = True,
     processes: int = 1,
     target_chunk_size: int = 32 * 1024 * 1024,
@@ -244,6 +243,7 @@ def process_image(
         logging.info("Finding window size")
         window_size = find_bbox_size(segmentation_mask)
         logging.info(f"Window size automatically set to {window_size}")
+        window_size = (window_size, window_size)
     destination = pathlib.Path(destination)
     if channels is None:
         channels = np.arange(img.n_channels)
@@ -254,14 +254,14 @@ def process_image(
         channels = np.array(channels)
     if np.min(channels) < 0 or np.max(channels) >= img.n_channels:
         raise ValueError(f"Channel indices must be between 0 and {img.n_channels - 1}.")
-    array_shape = (len(channels), roi_data.shape[0], window_size, window_size)
+    array_shape = (len(channels), roi_data.shape[0], window_size[0], window_size[1])
     if cells_per_chunk is None:
         array_chunks = find_chunk_size(
             array_shape, np.dtype(img.dtype).itemsize, target_bytes=target_chunk_size
         )
     else:
         array_chunks = tuple(
-            int(x) for x in (len(channels), cells_per_chunk, window_size, window_size)
+            int(x) for x in (len(channels), cells_per_chunk, window_size[0], window_size[1])
         )
     logging.info(f"Using chunks of shape {array_chunks}")
     # If writing to a zip file, create a temporary directory to store the zarr files
@@ -289,19 +289,18 @@ def process_image(
         mask_thumbnails = zarr.create(
             store=mask_store,
             overwrite=True,
-            shape=(roi_data.shape[0], window_size, window_size),
+            shape=(roi_data.shape[0], window_size[0], window_size[1]),
             dtype=np.bool_,
             compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
         )
         mask_thumbnails_temp = np.empty(
-            (roi_data.shape[0], window_size, window_size),
+            (roi_data.shape[0], window_size[0], window_size[1]),
             dtype=np.bool_,
         )
         cut_cells(
             segmentation_mask,
             roi_data,
-            window_size,
             mask_thumbnails_temp,
             create_mask_thumbnails=True,
         )
@@ -398,10 +397,10 @@ def process_image(
             cell_range = futures[future]
             try:
                 future.result()
-                logging.info(f"Cells {cell_range[0]}-{cell_range[1]} done")
+                logging.info(f"Tiles {cell_range[0]}-{cell_range[1]} done")
             except Exception as ex:
                 logging.error(
-                    f"Error processing cells {cell_range[0]}-{cell_range[1]}: {ex}"
+                    f"Error processing tiles {cell_range[0]}-{cell_range[1]}: {ex}"
                 )
                 raise ex
     if use_zip:
