@@ -37,24 +37,26 @@ def cut(args=None):
         Thumbnails will be stored as Zarr array (https://zarr.readthedocs.io/en/stable/index.html)
         with dimensions [#channels, #cells, window_size, window_size].
 
+        Thumbnails overlapping the image boundary will be padded with zeros.
+
         The chunking shape greatly influences performance
         https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
         """,
     )
     parser.add_argument(
-        "IMAGE",
+        "IMAGE", metavar="image.tif",
         help="Path to image in TIFF format, potentially with multiple channels. "
         "Thumbnails will be created from each channel.",
     )
     parser.add_argument(
-        "SEGMENTATION_MASK",
+        "SEGMENTATION_MASK", metavar="segmentation_mask.tif",
         help="Path to segmentation mask image in TIFF format. "
         "Used to automatically chose window size and find cell outlines. "
         "It is optional if --window-size is given and --mask-cells is not used. "
         "Pass \"-\" instead of a segmentation mask in that case.",
     )
     parser.add_argument(
-        "CELL_DATA",
+        "CELL_DATA", metavar="cell_data.csv",
         help="Path to CSV file with a row for each cell. Must contain columns CellID "
         "(must correspond to the cell IDs in the segmentation mask), Y_centroid, and X_centroid "
         "(the coordinates of cell centroids). "
@@ -63,7 +65,7 @@ def cut(args=None):
         "the Zarr array in the same order as they appear in the CSV file.",
     )
     parser.add_argument(
-        "DESTINATION", metavar="DESTINATION",
+        "DESTINATION", metavar="output.zarr",
         help="Path to a new directory where cell thumbnails will be stored in Zarr format. "
         "Use -z to store thumbnails in a single zip file instead. ",
     )
@@ -194,19 +196,26 @@ def cut_tiles(args=None):
 
         Tiles will be stored as Zarr array (https://zarr.readthedocs.io/en/stable/index.html)
         with dimensions [#channels, #tiles, tile_size, tile_size].
+
+        Coordinates of the created tiles can optionally be saved to a CSV file
+        using the --save-metadata option.
+
+        Tiles overlapping the image boundary will be padded with zeros. A column
+        OutOfBounds will be added to the metadata file indicating if a tile is
+        partially or completely outside the image bounds.
         """,
     )
     parser.add_argument(
-        "IMAGE",
+        "IMAGE", metavar="image.tif",
         help="Path to image in TIFF format, potentially with multiple channels. "
         "Thumbnails will be created from each channel.",
     )
     parser.add_argument(
-        "WINDOW_SIZE", metavar="WINDOW_SIZE", type=int,
+        "WINDOW_SIZE", metavar="window_size", type=int,
         help="Size of the tiles in pixels.",
     )
     parser.add_argument(
-        "DESTINATION", metavar="DESTINATION",
+        "DESTINATION", metavar="output.zarr",
         help="Path to a new directory where tiles will be stored in Zarr format. "
         "Use -z to store tiles in a single zip file instead. ",
     )
@@ -242,7 +251,7 @@ def cut_tiles(args=None):
     parser.add_argument(
         "--save-metadata",
         default=None,
-        help="Save a csv file with the metadata of the tiles.",
+        help="Save a csv file with metadata for the tiles, including their coordinates.",
     )
     parser.add_argument(
         "--cache-size",

@@ -208,15 +208,22 @@ def rois_from_grid(
     x_starts = np.arange(offset[0], width, step_size)
     y_starts = np.arange(offset[1], height, step_size)
     x_i, y_i = (v.ravel() for v in np.meshgrid(x_starts, y_starts))
-    return pd.DataFrame(
+    tile_df = pd.DataFrame(
         {
             "TileID": np.arange(x_i.size),
             "X_start": x_i,
-            "Y_start": y_i,
             "X_stop": x_i + window_size[0],
-            "Y_stop": y_i + window_size[1],
+            "Y_start": y_i,
+            "Y_stop": y_i + window_size[1]
         }
     )
+    tile_df["OutOfBounds"] = (
+        (tile_df["X_stop"] > width)
+        | (tile_df["Y_stop"] > height)
+        | (tile_df["X_start"] < 0)
+        | (tile_df["Y_start"] < 0)
+    )
+    return tile_df
 
 
 def process_image(

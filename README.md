@@ -22,24 +22,25 @@ pip install cellcutter
                      [--mask-cells] [--channels [CHANNELS ...]]
                      [--cache-size CACHE_SIZE]
                      [--chunk-size CHUNK_SIZE | --cells-per-chunk CELLS_PER_CHUNK]
-                     IMAGE SEGMENTATION_MASK CELL_DATA DESTINATION
+                     image.tif segmentation_mask.tif cell_data.csv output.zarr
 
     Cut out thumbnail images of all cells. Thumbnails will be stored as Zarr array
     (https://zarr.readthedocs.io/en/stable/index.html) with dimensions [#channels,
-    #cells, window_size, window_size]. The chunking shape greatly influences
-    performance https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-
-    optimizations.
+    #cells, window_size, window_size]. Thumbnails overlapping the image boundary
+    will be padded with zeros. The chunking shape greatly influences performance
+    https://zarr.readthedocs.io/en/stable/tutorial.html#chunk-optimizations.
 
     positional arguments:
-      IMAGE                 Path to image in TIFF format, potentially with
+      image.tif             Path to image in TIFF format, potentially with
                             multiple channels. Thumbnails will be created from
                             each channel.
-      SEGMENTATION_MASK     Path to segmentation mask image in TIFF format. Used
+      segmentation_mask.tif
+                            Path to segmentation mask image in TIFF format. Used
                             to automatically chose window size and find cell
                             outlines. It is optional if --window-size is given and
                             --mask-cells is not used. Pass "-" instead of a
                             segmentation mask in that case.
-      CELL_DATA             Path to CSV file with a row for each cell. Must
+      cell_data.csv         Path to CSV file with a row for each cell. Must
                             contain columns CellID (must correspond to the cell
                             IDs in the segmentation mask), Y_centroid, and
                             X_centroid (the coordinates of cell centroids). Only
@@ -47,7 +48,7 @@ pip install cellcutter
                             even if additional cells are present in the
                             segmentation mask. Cells are written to the Zarr array
                             in the same order as they appear in the CSV file.
-      DESTINATION           Path to a new directory where cell thumbnails will be
+      output.zarr           Path to a new directory where cell thumbnails will be
                             stored in Zarr format. Use -z to store thumbnails in a
                             single zip file instead.
 
@@ -91,18 +92,22 @@ pip install cellcutter
                      [--channels [CHANNELS ...]] [--save-metadata SAVE_METADATA]
                      [--cache-size CACHE_SIZE]
                      [--chunk-size CHUNK_SIZE | --tiles-per-chunk TILES_PER_CHUNK]
-                     IMAGE WINDOW_SIZE DESTINATION
+                     image.tif window_size output.zarr
 
     Cut out tiles in a regular grid from an image. Tiles will be stored as Zarr
     array (https://zarr.readthedocs.io/en/stable/index.html) with dimensions
-    [#channels, #tiles, tile_size, tile_size].
+    [#channels, #tiles, tile_size, tile_size]. Coordinates of the created tiles
+    can optionally be saved to a CSV file using the --save-metadata option. Tiles
+    overlapping the image boundary will be padded with zeros. A column OutOfBounds
+    will be added to the metadata file indicating if a tile is partially or
+    completely outside the image bounds.
 
     positional arguments:
-      IMAGE                 Path to image in TIFF format, potentially with
+      image.tif             Path to image in TIFF format, potentially with
                             multiple channels. Thumbnails will be created from
                             each channel.
-      WINDOW_SIZE           Size of the tiles in pixels.
-      DESTINATION           Path to a new directory where tiles will be stored in
+      window_size           Size of the tiles in pixels.
+      output.zarr           Path to a new directory where tiles will be stored in
                             Zarr format. Use -z to store tiles in a single zip
                             file instead.
 
@@ -122,7 +127,8 @@ pip install cellcutter
                             all channels are included. This option must be *after*
                             all positional arguments.
       --save-metadata SAVE_METADATA
-                            Save a csv file with the metadata of the tiles.
+                            Save a csv file with metadata for the tiles, including
+                            their coordinates.
       --cache-size CACHE_SIZE
                             Cache size for reading image tiles in MB. For best
                             performance the cache size should be larger than the
