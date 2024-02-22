@@ -45,22 +45,26 @@ def padded_subset(
     """Return a slice of the array with the given window size padded with fill_value if the slice is out of bounds.
     Assumes that the coordinates are the last two dimensions of the array.
     """
+    if x_start > x_stop or y_start > y_stop:
+        raise ValueError("x_start must be less than x_stop and y_start must be less than y_stop")
     output_shape = img.shape[:-2] + (
         y_stop - y_start,
         x_stop - x_start
     )
     output_array = np.full(output_shape, fill_value, dtype=img.dtype)
 
-    row_start = max(y_start, 0)
-    row_end = min(y_stop, img.shape[-2])
-    col_start = max(x_start, 0)
-    col_end = min(x_stop, img.shape[-1])
+    slice_actual = (
+        slice(max(y_start, 0), min(y_stop, img.shape[-2])),
+        slice(max(x_start, 0), min(x_stop, img.shape[-1])),
+    )
 
-    output_array[
-        ...,
-        row_start - y_start:row_end - y_start,
-        col_start - x_start:col_end - x_start
-    ] = img[..., row_start:row_end, col_start:col_end]
+    # If the slice is completely out of bounds, no modification is needed
+    if not any(s.start >= s.stop for s in slice_actual):
+        output_array[
+            ...,
+            slice_actual[0].start - y_start:slice_actual[0].stop - y_start,
+            slice_actual[1].start - x_start:slice_actual[1].stop - x_start
+        ] = img[..., slice_actual[0], slice_actual[1]]
 
     return output_array
 
