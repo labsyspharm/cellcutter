@@ -349,9 +349,9 @@ def process_image(
             img_array = np.ndarray(img_shape, dtype=img.dtype, buffer=raw_sm.buf)
 
             if img.n_channels == 1:
-                img_array[...] = img.zarr.oindex[:, :]
+                img_array[...] = img.zarr_no_cache.oindex[:, :]
             else:
-                img_array[...] = img.zarr.oindex[channels, :, :]
+                img_array[...] = img.zarr_no_cache.oindex[channels, :, :]
 
             if mask_thumbnails is not None:
                 raw_sm_mask = smm.SharedMemory(size=n_bytes_mask)

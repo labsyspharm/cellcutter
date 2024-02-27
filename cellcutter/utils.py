@@ -78,9 +78,14 @@ class Image:
         self.zarr = zarr.open(
             zarr.LRUStoreCache(self.image.aszarr(series=0), self.cache_size), mode="r"
         )
+        self.zarr_no_cache = zarr.open(
+            self.image.aszarr(series=0), mode="r"
+        )
         # If we get a group back assume that the first group is highest resolution
         if isinstance(self.zarr, zarr.Group):
             self.zarr = self.zarr[0]
+        if isinstance(self.zarr_no_cache, zarr.Group):
+            self.zarr_no_cache = self.zarr_no_cache[0]
 
     def get_channel(self, channel_index: int) -> np.ndarray:
         return self.base_series.pages[channel_index].asarray()
