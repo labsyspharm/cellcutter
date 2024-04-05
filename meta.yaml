@@ -1,5 +1,5 @@
 {% set name = "cellcutter" %}
-{% set version = "0.2.8" %}
+{% set version = "0.2.10" %}
 
 package:
   name: "{{ name|lower }}"
@@ -7,13 +7,14 @@ package:
 
 source:
   url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz
-  sha256: 5ab1d9b97747bcd02c5cc8cec620472c1bc1fd4427f05928070ebace3b239f0b
+  sha256: 1ff382ee4d3a2b6c42b60c230982ac179e56c0ebc34d9bd70d5ac4541301fc34
 
 build:
   number: 0
   script: "{{ PYTHON }} -m pip install . --no-deps --ignore-installed -vv "
   entry_points:
     - cut_cells=cellcutter.cli:cut
+    - cut_tiles=cellcutter.cli:cut_tiles
   noarch: python
 
 requirements:
@@ -26,7 +27,7 @@ requirements:
     - numpy
     - pandas
     - tifffile
-    - zarr
+    - zarr<=2.14.0
     - numcodecs
 
 test:
