@@ -92,7 +92,7 @@ class Image:
 
     @property
     def width_height(self) -> Tuple[int, int]:
-        return tuple(self.base_series.shape)[-2:]
+        return tuple(self.base_series.shape)[-2:][::-1]
 
     @property
     def n_channels(self) -> int:

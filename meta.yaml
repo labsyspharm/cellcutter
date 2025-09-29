@@ -1,5 +1,5 @@
 {% set name = "cellcutter" %}
-{% set version = "0.2.10" %}
+{% set version = "0.2.12" %}
 
 package:
   name: "{{ name|lower }}"
@@ -7,7 +7,7 @@ package:
 
 source:
   url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz
-  sha256: 1ff382ee4d3a2b6c42b60c230982ac179e56c0ebc34d9bd70d5ac4541301fc34
+  sha256: 8c3855ac754edb06efb7340ba9c5f26091e71be02252f662e90626333803de51
 
 build:
   number: 0
