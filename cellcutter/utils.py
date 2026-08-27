@@ -7,6 +7,7 @@ from typing import Union, Tuple, Any
 import numpy as np
 import tifffile
 import zarr
+import zarr.experimental.cache_store
 
 
 def pairwise(iterable):
@@ -75,17 +76,14 @@ class Image:
         self.image = tifffile.TiffFile(path)
         self.base_series = self.image.series[0]
         self.cache_size = cache_size
-        self.zarr = zarr.open(
-            zarr.LRUStoreCache(self.image.aszarr(series=0), self.cache_size), mode="r"
+        store_direct = self.image.aszarr(series=0, level=0)
+        store = zarr.experimental.cache_store.CacheStore(
+            store=store_direct,
+            cache_store=zarr.storage.MemoryStore(),
+            max_size=cache_size,
         )
-        self.zarr_no_cache = zarr.open(
-            self.image.aszarr(series=0), mode="r"
-        )
-        # If we get a group back assume that the first group is highest resolution
-        if isinstance(self.zarr, zarr.Group):
-            self.zarr = self.zarr[0]
-        if isinstance(self.zarr_no_cache, zarr.Group):
-            self.zarr_no_cache = self.zarr_no_cache[0]
+        self.zarr_no_cache = zarr.open(store_direct, mode='r')
+        self.zarr = zarr.open(store, mode='r')
 
     def get_channel(self, channel_index: int) -> np.ndarray:
         return self.base_series.pages[channel_index].asarray()

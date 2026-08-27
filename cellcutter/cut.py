@@ -87,12 +87,10 @@ def cut_cell_range(
         channels=channels,
     )
     cut_array[..., cell_range[0] : cell_range[1], :, :] = cell_stack_temp
-    try:
-        logging.info(
-            f"Cache hits: {image.zarr.store.hits} Cache misses: {image.zarr.store.misses}"
-        )
-    except Exception:
-        pass
+    # FIXME: Logging not configured in ProcessPoolExecutor workers so this does nothing. Leaving it
+    # commented out for reference in case we switch to threads and want to resurrect it.
+    # size = round(image.zarr.store.cache_info()['current_size'] / 1024 / 1024, 1)
+    # logging.info(f"Cache size: {size} MB")
 
 
 def cut_cell_range_shared_mem(
@@ -169,7 +167,7 @@ def rois_from_cell_data(
         logging.info(
             "Check if all cell IDs from the CSV are represented in the segmentation mask"
         )
-        cell_ids_not_in_segmentation_mask = np.in1d(
+        cell_ids_not_in_segmentation_mask = np.isin(
             cell_data["CellID"], segmentation_mask, invert=True
         )
         n_not_in_segmentation_mask = np.sum(cell_ids_not_in_segmentation_mask)
@@ -251,7 +249,7 @@ def process_image(
         window_size = find_bbox_size(segmentation_mask)
         logging.info(f"Window size automatically set to {window_size}")
         window_size = (window_size, window_size)
-    destination = pathlib.Path(destination)
+    destination = pathlib.Path(destination).with_suffix('.zarr')
     if channels is None:
         channels = np.arange(img.n_channels)
     else:
@@ -271,35 +269,30 @@ def process_image(
             int(x) for x in (len(channels), cells_per_chunk, window_size[0], window_size[1])
         )
     logging.info(f"Using chunks of shape {array_chunks}")
-    # If writing to a zip file, create a temporary directory to store the zarr files
-    # and compress them into the zip file at the end. Solves issues with concurrent
-    # access to the same zip file.
-    store = zarr.DirectoryStore(str(destination)) if not use_zip else zarr.TempStore()
-    logging.info(f"Writing thumbnails to {store.path}")
+    logging.info(f"Writing thumbnails to {destination}")
     # Chosing low compression level for speed. Size difference is negligible.
-    file = zarr.create(
-        store=store,
+    store = zarr.create(
+        store=destination,
         overwrite=True,
         shape=array_shape,
         dtype=img.dtype,
         compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
         chunks=array_chunks,
+        zarr_format=2,
     )
     mask_thumbnails = None
     if mask_cells:
         logging.info("Cutting cell mask thumbnails")
         destination_mask = destination.with_stem(f"{destination.stem}_mask")
-        mask_store = (
-            zarr.DirectoryStore(destination_mask) if not use_zip else zarr.TempStore()
-        )
-        logging.debug(f"Writing mask thumbnails to {mask_store.path}")
+        logging.info(f"Writing mask thumbnails to {destination_mask}")
         mask_thumbnails = zarr.create(
-            store=mask_store,
+            store=destination_mask,
             overwrite=True,
             shape=(roi_data.shape[0], window_size[0], window_size[1]),
             dtype=np.bool_,
             compressor=Blosc(cname="zstd", clevel=2, shuffle=Blosc.SHUFFLE),
             chunks=(array_chunks[1], array_chunks[2], array_chunks[3]),
+            zarr_format=2,
         )
         mask_thumbnails_temp = np.empty(
             (roi_data.shape[0], window_size[0], window_size[1]),
@@ -314,11 +307,9 @@ def process_image(
         mask_thumbnails[...] = mask_thumbnails_temp[...]
         # If writing to zip files was requested zipping up the directory now
         if use_zip:
-            logging.debug(f"Zipping up mask to {destination_mask}")
-            zip_dir(
-                mask_store.path,
-                destination_mask,
-            )
+            mask_zip_path = destination_mask.with_suffix('.zip')
+            logging.info(f"Zipping up mask to {mask_zip_path}")
+            zip_dir(mask_thumbnails.store.root, mask_zip_path)
     n_cells = array_shape[1]
     # Only load required channels
     if img.n_channels == 1:
@@ -368,7 +359,7 @@ def process_image(
                     cell_data=roi_data,
                     cell_range=cell_range,
                     window_size=window_size,
-                    cut_array=file,
+                    cut_array=store,
                     mask_thumbnails_spec=SharedNumpyArraySpec(
                         raw_sm_mask.name, mask_thumbnails.shape, mask_thumbnails.dtype
                     )
@@ -393,7 +384,7 @@ def process_image(
                     cell_data=roi_data,
                     cell_range=cell_range,
                     window_size=window_size,
-                    cut_array=file,
+                    cut_array=store,
                     mask_thumbnails=mask_thumbnails,
                     cache_size=cache_size // processes,
                     channels=channels,
@@ -411,6 +402,6 @@ def process_image(
                 )
                 raise ex
     if use_zip:
-        logging.info("Zipping up thumbnails")
-        logging.debug(f"Zipping up to {destination}")
-        zip_dir(store.path, destination)
+        zip_path = destination.with_suffix('.zip')
+        logging.info(f"Zipping up thumbnails to {zip_path}")
+        zip_dir(store.store.root, zip_path)
