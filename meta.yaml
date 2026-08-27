@@ -21,10 +21,11 @@ requirements:
   host:
     - pip
     - python>=3.11
+    - setuptools
   run:
     - python>=3.11
     - scikit-image
-    - numpy
+    - numpy>=2
     - pandas
     - tifffile
     - zarr>=3.1.4

@@ -1,3 +1,31 @@
+[project]
+name = "cellcutter"
+version = "0.2.12"
+description = "cellcutter is a Python module for creating thumbnail images of cells given a multi-channel TIFF image and segmentation mask"
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [
+    { name = "Clemens Hug" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2",
+    "pandas",
+    "scikit-image",
+    "tifffile",
+    "zarr>=3.1.4",
+    "numcodecs",
+]
+
+[project.urls]
+homepage = "https://github.com/labsyspharm/cellcutter"
+repository = "https://github.com/labsyspharm/cellcutter.git"
+
+[project.scripts]
+cut_cells = "cellcutter.cli:cut"
+cut_tiles = "cellcutter.cli:cut_tiles"
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
