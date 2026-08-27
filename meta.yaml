@@ -1,17 +1,17 @@
 {% set name = "cellcutter" %}
-{% set version = "0.2.12" %}
+{% set version = "0.2.13" %}
 
 package:
   name: "{{ name|lower }}"
   version: "{{ version }}"
 
 source:
-  url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz
-  sha256: 8c3855ac754edb06efb7340ba9c5f26091e71be02252f662e90626333803de51
+  url: https://pypi.io/packages/py3/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}-py3-none-any.whl
+  sha256: 4f87f123d674353fbb9e553e98d7274044ec1d70baa2b32af0c999dd74a7db25
 
 build:
   number: 0
-  script: "{{ PYTHON }} -m pip install . --no-deps --ignore-installed -vv "
+  script: "{{ PYTHON }} -m pip install {{ name }}-{{ version }}*.whl --no-deps --ignore-installed -vv"
   entry_points:
     - cut_cells=cellcutter.cli:cut
     - cut_tiles=cellcutter.cli:cut_tiles
@@ -22,6 +22,7 @@ requirements:
     - pip
     - python>=3.11
     - setuptools
+    - wheel
   run:
     - python>=3.11
     - scikit-image
